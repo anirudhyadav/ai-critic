@@ -1,0 +1,69 @@
+import os
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+_SKIP_DIRS = {"__pycache__", ".venv", "venv", "env", "node_modules", ".git", "dist", "build"}
+
+
+def _read_file(path: str) -> dict:
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        return {"path": path, "content": f.read()}
+
+
+def load_source_files(target: str) -> list:
+    """Return [{path, content}] for all .py files at target (file or directory)."""
+    p = Path(target)
+    if p.is_file():
+        return [_read_file(str(p))]
+
+    files = []
+    for root, dirs, names in os.walk(p):
+        dirs[:] = sorted(d for d in dirs if d not in _SKIP_DIRS and not d.startswith("."))
+        for name in sorted(names):
+            if name.endswith(".py"):
+                files.append(_read_file(os.path.join(root, name)))
+    return files
+
+
+def parse_coverage_xml(xml_path: str) -> dict:
+    """
+    Parse a coverage.xml produced by `coverage xml`.
+    Returns {filename: {line_rate: float, missing_lines: [int, ...]}}
+    """
+    tree = ET.parse(xml_path)
+    root = tree.getroot()
+    result = {}
+    for cls in root.iter("class"):
+        filename = cls.get("filename", "unknown")
+        line_rate = float(cls.get("line-rate", 0))
+        missing = [
+            int(line.get("number"))
+            for line in cls.iter("line")
+            if line.get("hits") == "0"
+        ]
+        result[filename] = {"line_rate": line_rate, "missing_lines": missing}
+    return result
+
+
+def load_inputs(target: str, coverage_xml: str = None) -> dict:
+    """
+    Main entry point.
+
+    Returns:
+        {
+            "files":    [{path, content}, ...],
+            "coverage": {filename: {line_rate, missing_lines}} | None,
+            "mode":     "security" | "coverage",
+        }
+    """
+    files = load_source_files(target)
+    if not files:
+        raise ValueError(f"No Python source files found at: {target}")
+
+    coverage = None
+    mode = "security"
+    if coverage_xml:
+        coverage = parse_coverage_xml(coverage_xml)
+        mode = "coverage"
+
+    return {"files": files, "coverage": coverage, "mode": mode}
