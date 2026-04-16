@@ -1,12 +1,21 @@
 #!/usr/bin/env python3
 """
 aicritic — multi-LLM critic chain
+
 Usage:
     python aicritic.py check ./myproject
-    python aicritic.py check ./myproject --coverage coverage.xml
-    python aicritic.py check ./myproject --roles ./my-roles --min-risk high
+    python aicritic.py check ./myproject --tool code_coverage --coverage coverage.xml
+    python aicritic.py check ./myproject --tool pr_review --min-risk medium
+    python aicritic.py check ./myproject --roles ./my-custom-roles
+
+Built-in tools:
+  Ship Safety   : migration_safety, secrets_scan
+  Code Confidence: code_coverage, error_handling
+  Review Depth  : pr_review, test_quality
+  Codebase Health: dependency_audit, performance
 """
 import argparse
+import os
 import sys
 
 
@@ -20,24 +29,33 @@ def main() -> None:
     check_cmd = sub.add_parser("check", help="Analyse source code or coverage report")
     check_cmd.add_argument("target", help="Path to a .py file or directory")
     check_cmd.add_argument(
+        "--tool",
+        metavar="NAME",
+        default=None,
+        help=(
+            "Built-in tool profile to use. "
+            "Choices: migration_safety, secrets_scan, code_coverage, error_handling, "
+            "pr_review, test_quality, dependency_audit, performance. "
+            "Defaults to security_review."
+        ),
+    )
+    check_cmd.add_argument(
         "--coverage",
         metavar="FILE",
-        help="Optional coverage.xml produced by `coverage xml`",
+        help="Optional coverage.xml produced by `coverage xml` (used with code_coverage tool)",
     )
     check_cmd.add_argument(
         "--roles",
         metavar="DIR",
         default=None,
-        help="Directory containing analyst.md / checker.md / critic.md "
-             "(default: built-in roles/)",
+        help="Custom roles directory — overrides --tool and built-in profiles",
     )
     check_cmd.add_argument(
         "--min-risk",
         metavar="LEVEL",
         choices=["low", "medium", "high"],
         default=None,
-        help="Only surface findings at or above this risk level "
-             "(overrides critic.md min_risk)",
+        help="Only surface findings at or above this level (overrides critic.md min_risk)",
     )
     check_cmd.add_argument(
         "--output",
@@ -54,6 +72,22 @@ def main() -> None:
 
     # --- guard: token present -------------------------------------------
     import config
+
+    # Resolve roles directory
+    # Priority: --roles (fully custom) > --tool (built-in profile) > roles/ (default)
+    if args.roles:
+        roles_dir = args.roles
+    elif args.tool:
+        roles_dir = os.path.join(config.TOOLS_DIR, args.tool)
+        if not os.path.isdir(roles_dir):
+            print(
+                f"Error: unknown tool '{args.tool}'.\n"
+                f"Available: {', '.join(config.TOOLS)}"
+            )
+            sys.exit(1)
+    else:
+        roles_dir = None   # uses config.ROLES_DIR default
+
     if not config.GITHUB_TOKEN:
         print(
             "Error: GITHUB_TOKEN is not set.\n"
@@ -84,13 +118,13 @@ def main() -> None:
         sys.exit(1)
 
     mode_label = "coverage analysis" if inputs["mode"] == "coverage" else "security review"
-    roles_note = f" · roles: {args.roles}" if args.roles else ""
-    console.print(f"[dim]Mode: {mode_label} — {len(inputs['files'])} file(s){roles_note}[/dim]\n")
+    tool_label = args.tool or (os.path.basename(args.roles) if args.roles else "security_review")
+    console.print(f"[dim]Tool: {tool_label} — {len(inputs['files'])} file(s)[/dim]\n")
 
     # Step 1 — Sonnet
     console.print("[dim]  Running Claude Sonnet…[/dim]")
     try:
-        analyst_result = run_analyst(inputs, args.roles)
+        analyst_result = run_analyst(inputs, roles_dir)
     except Exception as e:
         console.print(f"[red]Sonnet error:[/red] {e}")
         sys.exit(1)
@@ -99,7 +133,7 @@ def main() -> None:
     # Step 2 — Gemini
     console.print("\n[dim]  Running Gemini…[/dim]")
     try:
-        checker_result = run_checker(inputs, analyst_result, args.roles)
+        checker_result = run_checker(inputs, analyst_result, roles_dir)
     except Exception as e:
         console.print(f"[red]Gemini error:[/red] {e}")
         sys.exit(1)
@@ -108,7 +142,7 @@ def main() -> None:
     # Step 3 — Opus
     console.print("\n[dim]  Running Claude Opus…[/dim]")
     try:
-        critic_result = run_critic(inputs, analyst_result, checker_result, args.roles)
+        critic_result = run_critic(inputs, analyst_result, checker_result, roles_dir)
     except Exception as e:
         console.print(f"[red]Opus error:[/red] {e}")
         sys.exit(1)

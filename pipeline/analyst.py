@@ -31,7 +31,13 @@ def run_analyst(inputs: dict, roles_dir: str = None) -> dict:
     )
 
     role = config.load_role("analyst", roles_dir)
-    base_prompt = config.SYSTEM_PROMPTS[f"analyst_{inputs['mode']}"]
+
+    # role["mode"] wins (set by tool profile); fall back to inputs["mode"] (security/coverage)
+    prompt_key = f"analyst_{role['mode'] or inputs['mode']}"
+    base_prompt = config.SYSTEM_PROMPTS.get(
+        prompt_key,
+        config.SYSTEM_PROMPTS["analyst_security"],   # last-resort fallback
+    )
     system_prompt = (
         f"{base_prompt}\n\n"
         f"## Role Instructions\n{role['instructions']}"
