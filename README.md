@@ -263,9 +263,93 @@ python aicritic.py check ./demo --tool secrets_scan --min-risk high
 
 ---
 
+## Running as a GitHub Copilot Extension
+
+The same pipeline runs as a Copilot Extension (Agent type). Users type
+`@aicritic check my code` directly in VS Code or GitHub.com Copilot Chat.
+
+### How it works differently from the CLI
+
+| | CLI | Copilot Extension |
+|-|-----|-------------------|
+| Code input | File paths on disk | Code pasted in chat as a fenced block |
+| Tool selection | `--tool` flag | Auto-detected from natural language |
+| Output | Console + markdown file | Streamed into Copilot Chat as it runs |
+| Auth | `GITHUB_TOKEN` env var | GitHub App ECDSA signature on every request |
+
+Each model stage streams its results into the chat as it completes — the user
+sees Sonnet's findings while Gemini is still running.
+
+### Setup
+
+**1. Start the server**
+```bash
+pip install -r requirements.txt
+uvicorn server:app --reload --port 8000
+```
+
+**2. Expose it publicly (local dev)**
+```bash
+ngrok http 8000
+# Note the https URL — e.g. https://abc123.ngrok.io
+```
+
+**3. Register a GitHub App**
+- Go to `github.com/settings/apps` → New GitHub App
+- Set **Callback URL** and **Webhook URL** to your ngrok URL
+- Under **Copilot** → set type to **Agent**, callback URL to `https://abc123.ngrok.io`
+- Install the app on your account or organisation
+
+**4. Enable dev mode for local testing**
+```bash
+# .env
+AICRITIC_DEV_MODE=true    # skips ECDSA signature verification
+GITHUB_TOKEN=ghp_...
+```
+
+**5. Use it in VS Code**
+```
+@aicritic check this code for security issues
+
+```python
+def login(user, pwd):
+    query = f"SELECT * FROM users WHERE user='{user}'"
+    ...
+```
+```
+
+### Tool auto-detection
+
+The extension detects which tool to run from the user's message:
+
+| Keywords in message | Tool selected |
+|---------------------|---------------|
+| secret, credential, hardcoded | `secrets_scan` |
+| coverage, untested | `code_coverage` |
+| migration, alter table | `migration_safety` |
+| performance, slow, n+1 | `performance` |
+| error handling, exception | `error_handling` |
+| dependency, requirements | `dependency_audit` |
+| pull request, pr review | `pr_review` |
+| test quality, flaky | `test_quality` |
+| _(anything else)_ | `security_review` |
+
+### Project structure — what's new for the extension
+
+```
+copilot/
+├── auth.py       GitHub ECDSA signature verification
+├── parser.py     Extract code blocks + detect tool from chat messages
+└── streamer.py   Format pipeline results as SSE chunks
+server.py         FastAPI entry point (uvicorn server:app)
+```
+
+---
+
 ## Roadmap
 
 | Phase | Status | Description |
 |-------|--------|-------------|
-| 1 — CLI demo | ✓ Done | Local tool, `python aicritic.py check ./src` |
-| 2 — Copilot Extension | Planned | `@aicritic` in VS Code and GitHub.com, FastAPI backend |
+| 1 — CLI | ✓ Done | Local tool, `python aicritic.py check ./src` |
+| 2 — Copilot Extension | ✓ Done | `@aicritic` in VS Code and GitHub.com, FastAPI + SSE |
+| 3 — Internal hosting | Planned | Deploy FastAPI behind corporate proxy, firm-wide rollout |

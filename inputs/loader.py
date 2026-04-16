@@ -45,6 +45,22 @@ def parse_coverage_xml(xml_path: str) -> dict:
     return result
 
 
+def from_text(files: dict, mode: str = "security") -> dict:
+    """
+    Build an inputs dict from a {filename: content} mapping.
+    Used by the Copilot Extension where code arrives as text, not file paths.
+
+    Args:
+        files: {"snippet_1.py": "def login(...): ...", ...}
+        mode:  "security" | "coverage" | any tool mode string
+    """
+    return {
+        "files":    [{"path": path, "content": content} for path, content in files.items()],
+        "coverage": None,
+        "mode":     mode,
+    }
+
+
 def load_inputs(target: str, coverage_xml: str = None) -> dict:
     """
     Main entry point.
