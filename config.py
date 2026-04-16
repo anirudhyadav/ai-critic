@@ -17,6 +17,54 @@ MAX_TOKENS  = 4096
 TEMPERATURE = 0.2
 REPORT_FILE = "aicritic_report.md"
 
+# Default roles directory (relative to this file)
+ROLES_DIR = os.path.join(os.path.dirname(__file__), "roles")
+
+# Risk level ordering for threshold filtering
+RISK_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+
+
+def load_role(name: str, roles_dir: str = None) -> dict:
+    """
+    Parse a role markdown file and return its configuration.
+
+    Returns:
+        {
+            "focus":        str,   # e.g. "security"
+            "strictness":   str,   # "low" | "medium" | "high"
+            "min_risk":     str,   # "low" | "medium" | "high"
+            "instructions": str,   # freeform markdown body injected into the prompt
+        }
+    """
+    path = os.path.join(roles_dir or ROLES_DIR, f"{name}.md")
+
+    defaults = {"focus": "security", "strictness": "medium", "min_risk": "low", "instructions": ""}
+
+    if not os.path.exists(path):
+        return defaults
+
+    with open(path, encoding="utf-8") as fh:
+        content = fh.read()
+
+    meta: dict = {}
+    body = content
+
+    if content.startswith("---"):
+        parts = content.split("---", 2)
+        if len(parts) >= 3:
+            for line in parts[1].strip().splitlines():
+                if ":" in line:
+                    k, v = line.split(":", 1)
+                    meta[k.strip()] = v.strip()
+            body = parts[2].strip()
+
+    return {
+        "focus":        meta.get("focus",      defaults["focus"]),
+        "strictness":   meta.get("strictness", defaults["strictness"]),
+        "min_risk":     meta.get("min_risk",   defaults["min_risk"]),
+        "instructions": body,
+    }
+
 # ---------------------------------------------------------------------------
 # System prompts — one per role, two modes for analyst (security / coverage)
 # ---------------------------------------------------------------------------

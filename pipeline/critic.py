@@ -4,20 +4,36 @@ import config
 from pipeline import parse_llm_json
 
 
-def run_critic(inputs: dict, analyst_output: dict, checker_output: dict) -> dict:
+def run_critic(
+    inputs: dict,
+    analyst_output: dict,
+    checker_output: dict,
+    roles_dir: str = None,
+) -> dict:
     """Step 3: Claude Opus — critic/arbiter, receives all prior context."""
     client = OpenAI(
         base_url=config.GITHUB_MODELS_BASE_URL,
         api_key=config.GITHUB_TOKEN,
     )
 
+    role = config.load_role("critic", roles_dir)
+    base_prompt = config.SYSTEM_PROMPTS["critic"]
+    system_prompt = (
+        f"{base_prompt}\n\n"
+        f"## Role Instructions\n{role['instructions']}"
+        if role["instructions"] else base_prompt
+    )
+
     source_parts = [
         f"## File: {f['path']}\n\n```python\n{f['content']}\n```"
         for f in inputs["files"]
     ]
-    source_text   = "\n\n".join(source_parts)
-    analyst_json  = json.dumps(analyst_output, indent=2)
-    checker_json  = json.dumps(checker_output, indent=2)
+    source_text  = "\n\n".join(source_parts)
+
+    analyst_clean = {k: v for k, v in analyst_output.items() if not k.startswith("_")}
+    checker_clean = {k: v for k, v in checker_output.items() if not k.startswith("_")}
+    analyst_json  = json.dumps(analyst_clean, indent=2)
+    checker_json  = json.dumps(checker_clean, indent=2)
 
     user_message = (
         f"# Source Code\n\n{source_text}\n\n"
@@ -28,11 +44,13 @@ def run_critic(inputs: dict, analyst_output: dict, checker_output: dict) -> dict
     response = client.chat.completions.create(
         model=config.MODELS["critic"],
         messages=[
-            {"role": "system", "content": config.SYSTEM_PROMPTS["critic"]},
+            {"role": "system", "content": system_prompt},
             {"role": "user",   "content": user_message},
         ],
         max_tokens=config.MAX_TOKENS,
         temperature=config.TEMPERATURE,
     )
 
-    return parse_llm_json(response.choices[0].message.content)
+    result = parse_llm_json(response.choices[0].message.content)
+    result["_role_config"] = role
+    return result

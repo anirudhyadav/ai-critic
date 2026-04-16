@@ -17,6 +17,31 @@ _RISK_COLOR = {
 }
 
 
+def filter_by_risk(result: dict, min_risk: str) -> dict:
+    """
+    Return a copy of result with findings filtered to >= min_risk.
+    Also filters recommendations on critic output.
+    Internal _role_config key is preserved unchanged.
+    """
+    threshold = config.RISK_ORDER.get(min_risk.lower(), 0)
+
+    filtered = dict(result)
+
+    if "findings" in filtered:
+        filtered["findings"] = [
+            f for f in filtered["findings"]
+            if config.RISK_ORDER.get(f.get("risk", "low"), 0) >= threshold
+        ]
+
+    if "recommendations" in filtered:
+        filtered["recommendations"] = [
+            r for r in filtered["recommendations"]
+            if config.RISK_ORDER.get(r.get("risk_addressed", "low"), 0) >= threshold
+        ]
+
+    return filtered
+
+
 def _rc(risk: str) -> str:
     """Return a rich color tag for a risk level string."""
     return _RISK_COLOR.get(risk.lower(), "white")

@@ -23,14 +23,21 @@ def _build_user_message(inputs: dict) -> str:
     return "\n\n".join(parts)
 
 
-def run_analyst(inputs: dict) -> dict:
+def run_analyst(inputs: dict, roles_dir: str = None) -> dict:
     """Step 1: Claude Sonnet — primary analyst."""
     client = OpenAI(
         base_url=config.GITHUB_MODELS_BASE_URL,
         api_key=config.GITHUB_TOKEN,
     )
 
-    system_prompt = config.SYSTEM_PROMPTS[f"analyst_{inputs['mode']}"]
+    role = config.load_role("analyst", roles_dir)
+    base_prompt = config.SYSTEM_PROMPTS[f"analyst_{inputs['mode']}"]
+    system_prompt = (
+        f"{base_prompt}\n\n"
+        f"## Role Instructions\n{role['instructions']}"
+        if role["instructions"] else base_prompt
+    )
+
     user_message = _build_user_message(inputs)
 
     response = client.chat.completions.create(
@@ -43,4 +50,6 @@ def run_analyst(inputs: dict) -> dict:
         temperature=config.TEMPERATURE,
     )
 
-    return parse_llm_json(response.choices[0].message.content)
+    result = parse_llm_json(response.choices[0].message.content)
+    result["_role_config"] = role   # carry config forward for downstream filtering
+    return result
