@@ -1,3 +1,4 @@
+import difflib
 from datetime import datetime
 from pathlib import Path
 
@@ -129,6 +130,52 @@ def print_footer(report_path: str) -> None:
     console.print()
     console.print("─" * 52)
     console.print(f"[bold green]Report saved:[/bold green] {report_path}\n")
+
+
+# ---------------------------------------------------------------------------
+# Fixer output
+# ---------------------------------------------------------------------------
+
+def print_fixer(result: dict) -> None:
+    console.print("\n[bold yellow][[4/4] Fixer[/bold yellow]  [dim](applying recommendations)[/dim]")
+    files = result.get("files", [])
+    if not files:
+        console.print("  [dim]No changes to apply.[/dim]")
+    for f in files:
+        console.print(f"  [bold]{f.get('path', '')}[/bold]")
+        for change in f.get("changes_applied", []):
+            console.print(f"    [green]✓[/green] {change}")
+    skipped = result.get("skipped_recommendations", [])
+    if skipped:
+        console.print("  [dim]Skipped:[/dim]")
+        for s in skipped:
+            console.print(f"    [dim]→ {s}[/dim]")
+    summary = result.get("summary", "")
+    if summary:
+        console.print(f"  [dim italic]{summary}[/dim italic]")
+
+
+def print_diff(original: str, fixed: str, path: str) -> None:
+    """Print a colorised unified diff between original and fixed content."""
+    diff = list(difflib.unified_diff(
+        original.splitlines(keepends=True),
+        fixed.splitlines(keepends=True),
+        fromfile=f"a/{path}",
+        tofile=f"b/{path}",
+        lineterm="",
+    ))
+    if not diff:
+        return
+    console.print(f"\n[dim]─── {path} ───[/dim]")
+    for line in diff:
+        if line.startswith("+") and not line.startswith("+++"):
+            console.print(f"[green]{line}[/green]")
+        elif line.startswith("-") and not line.startswith("---"):
+            console.print(f"[red]{line}[/red]")
+        elif line.startswith("@@"):
+            console.print(f"[cyan]{line}[/cyan]")
+        else:
+            console.print(f"[dim]{line}[/dim]")
 
 
 # ---------------------------------------------------------------------------

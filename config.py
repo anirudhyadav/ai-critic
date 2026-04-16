@@ -11,10 +11,13 @@ MODELS = {
     "analyst": "claude-3-5-sonnet",
     "checker": "gemini-1.5-pro",
     "critic":  "claude-opus-4-5",
+    "fixer":   "claude-3-5-sonnet",
 }
 
-MAX_TOKENS  = 4096
-TEMPERATURE = 0.2
+MAX_TOKENS       = 4096
+FIXER_MAX_TOKENS = 8192   # fixer returns full file content — needs more room
+TEMPERATURE      = 0.2
+FIXER_TEMPERATURE = 0.1   # lower = more precise code changes
 REPORT_FILE = "aicritic_report.md"
 
 # Default roles directory — used when no --tool or --roles flag is passed
@@ -296,5 +299,41 @@ SYSTEM_PROMPTS = {
         + _CRITIC_SCHEMA +
         "}\n\n"
         "Be decisive. Resolve all disagreements. Order recommendations by urgency."
+    ),
+
+    # ------------------------------------------------------------------
+    # Fixer — applies critic recommendations to source files
+    # ------------------------------------------------------------------
+
+    "fixer": (
+        "You are a precise code fixer. "
+        "You receive source files and a prioritised list of recommendations from a code critic. "
+        "Apply ONLY the listed recommendations — do not refactor, rename, or improve anything "
+        "beyond what is explicitly requested.\n\n"
+        + _JSON_NOTE + "\n\n"
+        "Use exactly this schema:\n"
+        "{\n"
+        '  "model": "fixer",\n'
+        '  "role": "fixer",\n'
+        '  "files": [\n'
+        '    {\n'
+        '      "path": "<exact file path as provided>",\n'
+        '      "content": "<complete fixed file content — the ENTIRE file, not just changed lines>",\n'
+        '      "changes_applied": ["<what was changed and why>"]\n'
+        '    }\n'
+        '  ],\n'
+        '  "skipped_recommendations": [\n'
+        '    "<recommendation text> — skipped: <one-line reason>"\n'
+        '  ],\n'
+        '  "summary": "<1-2 sentence summary of what was fixed>"\n'
+        "}\n\n"
+        "Rules:\n"
+        "1. Only include files that were actually modified.\n"
+        "2. Return the COMPLETE file content for every modified file — not a diff, not a snippet.\n"
+        "3. If a fix requires a new import, add it.\n"
+        "4. If a recommendation is ambiguous or unsafe to apply without more context, "
+        "add it to skipped_recommendations with a reason.\n"
+        "5. Preserve all existing comments, formatting, and unrelated code exactly as-is.\n"
+        "6. Do not add docstrings, type hints, or any improvements beyond the specific fix."
     ),
 }
