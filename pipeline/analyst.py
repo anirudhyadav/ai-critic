@@ -41,7 +41,7 @@ def run_analyst(inputs: dict, roles_dir: str = None) -> dict:
     user_message = _build_user_message(inputs)
 
     response = client.chat.completions.create(
-        model=config.MODELS["analyst"],
+        model=role["model"],
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user",   "content": user_message},

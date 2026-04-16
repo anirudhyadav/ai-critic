@@ -42,7 +42,7 @@ def run_critic(
     )
 
     response = client.chat.completions.create(
-        model=config.MODELS["critic"],
+        model=role["model"],
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user",   "content": user_message},

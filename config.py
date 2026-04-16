@@ -33,12 +33,19 @@ def load_role(name: str, roles_dir: str = None) -> dict:
             "focus":        str,   # e.g. "security"
             "strictness":   str,   # "low" | "medium" | "high"
             "min_risk":     str,   # "low" | "medium" | "high"
+            "model":        str,   # LLM to use — falls back to MODELS[name] if unset
             "instructions": str,   # freeform markdown body injected into the prompt
         }
     """
     path = os.path.join(roles_dir or ROLES_DIR, f"{name}.md")
 
-    defaults = {"focus": "security", "strictness": "medium", "min_risk": "low", "instructions": ""}
+    defaults = {
+        "focus":        "security",
+        "strictness":   "medium",
+        "min_risk":     "low",
+        "model":        MODELS.get(name, ""),   # fallback to config.MODELS
+        "instructions": "",
+    }
 
     if not os.path.exists(path):
         return defaults
@@ -62,6 +69,7 @@ def load_role(name: str, roles_dir: str = None) -> dict:
         "focus":        meta.get("focus",      defaults["focus"]),
         "strictness":   meta.get("strictness", defaults["strictness"]),
         "min_risk":     meta.get("min_risk",   defaults["min_risk"]),
+        "model":        meta.get("model",      defaults["model"]),
         "instructions": body,
     }
 

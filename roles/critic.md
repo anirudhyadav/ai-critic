@@ -2,6 +2,7 @@
 focus: security
 strictness: high
 min_risk: medium
+model: claude-opus-4-5
 ---
 
 ## Your Role

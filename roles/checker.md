@@ -2,6 +2,7 @@
 focus: security
 strictness: medium
 min_risk: low
+model: gemini-1.5-pro
 ---
 
 ## Your Role

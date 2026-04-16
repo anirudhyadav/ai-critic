@@ -2,6 +2,7 @@
 focus: security
 strictness: high
 min_risk: low
+model: claude-3-5-sonnet
 ---
 
 ## Your Role

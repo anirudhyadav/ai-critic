@@ -35,7 +35,7 @@ def run_checker(inputs: dict, analyst_output: dict, roles_dir: str = None) -> di
     )
 
     response = client.chat.completions.create(
-        model=config.MODELS["checker"],
+        model=role["model"],
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user",   "content": user_message},
