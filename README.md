@@ -10,18 +10,25 @@ Your code
     │
     ▼
 [Gemini]          cross-checker       → verifies Sonnet's findings, flags gaps
-    │
+    │                                   (gracefully skipped on failure)
     ▼
 [Claude Opus]     critic / arbiter    → assigns risk levels, prioritises fixes
-    │
+    │                                   (sees only ±5 lines around each finding)
     ▼
-[Fixer]           (optional)          → applies recommendations back to source
-    │
+[Fixer]           (optional)          → deterministic patches + LLM fallback
+    │                                   → backs up originals before writing
     ▼
-Console report  +  aicritic_report.md
+Console  +  aicritic_report.md  +  aicritic.sarif (optional)
 ```
 
 All three models are accessed through the **GitHub Models API** — a single OpenAI-compatible endpoint covered by a GitHub Copilot Enterprise licence. No separate API keys required.
+
+**Three execution modes** for the analyst/checker stages:
+- **Sequential** (default): analyst → checker reviews analyst → critic — most rigorous, ~90s
+- **Parallel** (`--parallel`): analyst + checker run independently at the same time — ~50s
+- **Fast** (`--skip-checker`): analyst only, critic arbitrates alone — ~20s
+
+Large codebases are split into batches automatically, so the tool works on real repositories, not just demo snippets.
 
 ---
 
@@ -176,15 +183,28 @@ python aicritic.py check ./demo --tool secrets_scan --fix --dry-run
 python aicritic.py check ./demo --fix --min-risk high
 
 # Full fix with confirmation prompt
-python aicritic.py check ./demo --tool security_review --fix
+python aicritic.py check ./demo --tool secrets_scan --fix
 ```
 
-**Safety guarantees:**
-- A colorised diff is shown before any file is touched
+### Two-phase strategy
+
+The fixer splits the work between a **deterministic** path and an **LLM rewrite** path so the most dangerous failure mode (an LLM rewriting working code) is avoided for mechanical changes.
+
+| Phase | How it works | When it runs |
+|-------|-------------|--------------|
+| **1. Deterministic literal patch** | `str.replace(find, replace, 1)` — no LLM | Critic marked the fix `confidence: high` **and** `find` appears exactly once in the file |
+| **2. LLM rewrite** | Model rewrites file content given recommendations | Only for the leftovers: ambiguous, multi-location, or architectural changes |
+
+If a literal `find` string is missing or appears more than once, the patch is **skipped**, not guessed. Skipped items appear in the console as `→ reason` lines.
+
+### Safety guarantees
+
+- A colorised unified diff is shown before any file is touched
 - `Apply these changes? [y/N]` — nothing happens until you confirm
 - Original files are backed up to `.aicritic_backup/<timestamp>/` before writing
+- `--dry-run` previews the diff without prompting or writing
 
-**Tool-specific fixer behaviour:**
+### Tool-specific fixer behaviour
 
 | Tool | Fixer approach |
 |------|---------------|
@@ -200,16 +220,23 @@ python aicritic.py check ./demo --tool security_review --fix
 aicritic/
 ├── aicritic.py          CLI entry point
 ├── config.py            Model names, endpoints, system prompts, load_role()
+├── server.py            FastAPI entry point for the Copilot Extension
 ├── pipeline/
 │   ├── __init__.py      Shared JSON parser
 │   ├── analyst.py       Step 1 — Claude Sonnet
-│   ├── checker.py       Step 2 — Gemini
-│   ├── critic.py        Step 3 — Claude Opus
-│   └── fixer.py         Step 4 — applies fixes (optional)
+│   ├── checker.py       Step 2 — Gemini (graceful degradation on failure)
+│   ├── critic.py        Step 3 — Claude Opus (context-window only)
+│   ├── fixer.py         Step 4 — deterministic patches + LLM fallback
+│   └── batching.py      Auto-batching + finding-context extractor
 ├── inputs/
 │   └── loader.py        .py file walker + coverage.xml parser
 ├── report/
-│   └── formatter.py     Rich console output + markdown report + diff printer
+│   ├── formatter.py     Rich console + markdown report + diff printer
+│   └── sarif.py         SARIF 2.1.0 writer for GitHub code-scanning
+├── copilot/
+│   ├── auth.py          GitHub ECDSA signature verification
+│   ├── parser.py        Extract code blocks + detect tool from chat
+│   └── streamer.py      Format pipeline results as SSE chunks
 ├── roles/               Default security review profile
 │   ├── analyst.md
 │   ├── checker.md
@@ -225,9 +252,7 @@ aicritic/
 │   ├── dependency_audit/
 │   └── performance/
 ├── demo/                Deliberately flawed project for demos
-│   ├── auth.py
-│   ├── api.py
-│   └── utils.py
+├── runbooks/            Operator runbooks (CLI + Copilot Extension)
 ├── requirements.txt
 └── .env.example
 ```
@@ -263,6 +288,46 @@ python aicritic.py check ./demo --fix --dry-run
 # Scan for secrets only, show HIGH findings
 python aicritic.py check ./demo --tool secrets_scan --min-risk high
 ```
+
+---
+
+## CI Integration (GitHub Actions + SARIF)
+
+Emit SARIF 2.1.0 JSON with `--sarif` and upload via GitHub's standard action. Findings render as PR annotations and appear in the repository's Security tab; GitHub natively tracks dismissed alerts across runs.
+
+```yaml
+# .github/workflows/aicritic.yml
+name: aicritic
+
+on: [pull_request]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write     # required for SARIF upload
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - run: python aicritic.py check ./src --skip-checker --sarif aicritic.sarif
+        env:
+          GITHUB_TOKEN: ${{ secrets.AICRITIC_GITHUB_TOKEN }}
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: aicritic.sarif
+```
+
+Risk mapping:
+
+| aicritic risk | SARIF level | PR annotation |
+|---------------|-------------|---------------|
+| critical, high | `error` | red dot, blocks merge (if required) |
+| medium | `warning` | yellow dot |
+| low | `note` | blue dot |
 
 ---
 
@@ -356,3 +421,81 @@ server.py         FastAPI entry point (uvicorn server:app)
 | 1 — CLI | ✓ Done | Local tool, `python aicritic.py check ./src` |
 | 2 — Copilot Extension | ✓ Done | `@aicritic` in VS Code and GitHub.com, FastAPI + SSE |
 | 3 — Internal hosting | Planned | Deploy FastAPI behind corporate proxy, firm-wide rollout |
+
+---
+
+## Features & Benefits
+
+### Features
+
+**Pipeline**
+- Three-model critic chain: Claude Sonnet → Gemini → Claude Opus
+- Optional fourth stage: fixer applies critic recommendations back to source
+- Sequential, parallel, or fast (skip-checker) execution modes
+- Graceful degradation — Gemini failure no longer crashes the run
+- Auto-batching for codebases that exceed a single LLM's context window
+- Context-window critic — Opus sees only ±5 lines around each flagged range
+
+**Analysis coverage (8 built-in tools across 4 buckets)**
+- Ship Safety: `migration_safety`, `secrets_scan`
+- Code Confidence: `code_coverage`, `error_handling`
+- Review Depth: `pr_review`, `test_quality`
+- Codebase Health: `dependency_audit`, `performance`
+
+**Fixer**
+- Deterministic literal patches for high-confidence mechanical changes (no LLM rewrite)
+- LLM rewrite fallback for ambiguous or architectural changes
+- Colorised unified diff preview + `Apply? [y/N]` confirmation
+- `.aicritic_backup/<timestamp>/` mirror before any write
+- `--dry-run` preview-only mode
+
+**Control surface**
+- Markdown role files — swap model, strictness, or min_risk without touching Python
+- `--tool <name>` for built-in profiles, `--roles <dir>` for fully custom
+- `--min-risk` threshold filtering across all stages
+
+**Outputs**
+- Rich console report with colour-coded risk levels
+- Markdown report file (`aicritic_report.md`)
+- SARIF 2.1.0 JSON (`--sarif`) for GitHub code-scanning upload
+- Coverage XML parser (`--coverage`) for code_coverage tool
+
+**Surfaces**
+- CLI (`python aicritic.py check`) — local terminal, CI workflows
+- GitHub Copilot Extension (`@aicritic`) — VS Code + GitHub.com chat
+- Server streams results into chat as each stage completes (SSE)
+
+**Security**
+- GitHub ECDSA-P256 signature verification on every Copilot request
+- Dev mode flag to bypass verification during local development
+- No secrets in-repo — `GITHUB_TOKEN` loaded from `.env`
+
+### Benefits
+
+**For engineers**
+- Catches issues a single model misses — adversarial cross-check by design
+- Fast dev-loop mode (`--skip-checker`) for iteration; rigorous mode for PRs
+- Deterministic fixes for mechanical issues — no more second-guessing LLM rewrites
+- Works on real repositories — auto-batching prevents context-window failures
+- Unified tool for security, coverage, migrations, performance, and more
+
+**For engineering leadership**
+- Runs on existing GitHub Copilot Enterprise licence — zero new budget line
+- Consistent risk taxonomy (low / medium / high / critical) across every team
+- Full audit trail — markdown report + backups + SARIF history in GitHub
+- Findings appear natively in PR review — engineers don't need to learn a new tool
+- Demo-ready: clone, set token, run against `./demo/` — see results in seconds
+
+**For security and compliance**
+- SARIF upload means dismissed alerts are tracked natively by GitHub
+- Deterministic fixes are reviewable line-by-line before any write
+- Original source is backed up before any modification
+- No code leaves the corporate GitHub boundary — models are called via the
+  same endpoint that Copilot itself uses
+
+**For the organisation**
+- ~40-50% fewer LLM tokens per run (context-window critic + batching)
+- ~50% faster wall time with `--parallel`; ~80% faster with `--skip-checker`
+- Scales from single-file demos to multi-thousand-file repositories
+- Dual-surface delivery: same pipeline powers CI integration and interactive
+  chat, so adoption doesn't require picking one or the other

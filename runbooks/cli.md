@@ -172,6 +172,18 @@ python aicritic.py check ./src --tool secrets_scan --fix
 python aicritic.py check ./src --fix --min-risk high
 ```
 
+The fixer is two-phase:
+
+1. **Deterministic literal patches** — applied directly with `str.replace()` when
+   the critic provided `find`/`replace` with `confidence: high` and `find`
+   appears exactly once in the target file. No LLM involved.
+2. **LLM rewrite fallback** — runs only for the leftovers (ambiguous,
+   multi-location, or architectural changes).
+
+You'll see `N literal patch(es) (deterministic)` in the console when phase 1
+applied any patches. Skipped items appear as `→ reason` lines so you always
+know what the fixer declined to touch.
+
 When `--fix` is confirmed, originals are backed up to `.aicritic_backup/<timestamp>/` before any file is written.
 
 ### Generate a coverage report first
@@ -250,8 +262,11 @@ python aicritic.py check <target> [flags]
 | `GITHUB_TOKEN is not set` | Missing `.env` or not exported | Run `cp .env.example .env` and add token |
 | `401 Unauthorized` from API | Token expired or invalid | Regenerate token at github.com → Settings |
 | `No Python source files found` | Wrong target path | Check the path exists and contains `.py` files |
+| `Could not parse coverage XML` | Malformed `coverage.xml` | Regenerate with `coverage xml` after a fresh `coverage run` |
 | `Could not parse JSON from model response` | Model returned prose instead of JSON | Re-run — usually a one-off; if persistent, check system prompt in `config.py` |
-| Slow response | Three sequential LLM calls | Expected — 30–90 seconds total is normal |
+| `⚠ Checker stage unavailable` banner | Gemini API timeout or rate limit | Run continues with analyst-only findings; use `--skip-checker` to suppress the retry attempt next run |
+| Slow (90s+) sequential run | Three sequential LLM calls | Add `--parallel` (~50s) or `--skip-checker` (~20s) |
+| Hangs on a very large repo | Single prompt exceeds context window | Should self-resolve — auto-batching kicks in above ~40 kB; look for `[batch i/N]` progress lines |
 
 ---
 

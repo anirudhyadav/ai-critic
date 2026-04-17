@@ -214,6 +214,28 @@ Analysis complete.
 
 The user sees Sonnet's findings while Gemini is still running — no waiting for all three to finish.
 
+### Graceful degradation
+
+If the Gemini cross-check stage fails for any reason (rate limit, timeout,
+malformed response, API outage), the pipeline **does not crash**. Instead
+the chat shows:
+
+```
+> ⚠ Checker stage unavailable — <reason>.
+> Continuing with analyst-only findings.
+```
+
+Opus is explicitly told the cross-check was skipped and applies extra
+scrutiny to Sonnet's findings. The user always gets an answer — just a
+flagged one.
+
+### Token efficiency
+
+Opus (the critic stage) does not receive the full pasted code — it gets a
+compact ±5-line window around each flagged line range, plus the analyst
+and checker JSON. This keeps the final stage fast and well under any
+context-window limit, even for long pasted snippets.
+
 ---
 
 ## All environment variables
