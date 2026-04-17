@@ -23,7 +23,7 @@ from copilot.auth import verify_request, verify_org_membership, extract_user_tok
 from copilot.audit import log_request, log_denied
 from copilot.parser import parse_request
 from copilot.streamer import (
-    format_analyst, format_checker, format_critic,
+    format_analyst, format_checker, format_critic, format_explainer,
     sse_chunk, sse_done, sse_start,
 )
 from report.formatter import filter_by_risk
@@ -149,6 +149,15 @@ async def _pipeline_stream(parsed: dict, user_token: str = "", username: str = "
 
     for chunk in format_critic(critic_filtered):
         yield chunk
+
+    if critic_filtered.get("findings"):
+        yield sse_chunk("\n_Explaining findings…_\n\n")
+        from pipeline.explainer import run_explainer
+        explainer_result = await asyncio.to_thread(
+            run_explainer, inputs, critic_filtered, user_token
+        )
+        for chunk in format_explainer(explainer_result):
+            yield chunk
 
     yield sse_chunk("\n\n---\n_Analysis complete._\n")
     yield sse_done()

@@ -109,3 +109,29 @@ def format_critic(result: dict):
             )
     if result.get("summary"):
         yield sse_chunk(f"\n_{result['summary']}_\n")
+
+
+def format_explainer(result: dict):
+    explanations = result.get("explanations", [])
+    if not explanations:
+        return
+    yield sse_chunk("\n### Why these matter — and how to fix them\n\n")
+    for i, e in enumerate(explanations, 1):
+        risk = e.get("risk", "low").upper()
+        yield sse_chunk(
+            f"---\n\n"
+            f"**{i}. {e.get('issue', 'Finding')}** `[{risk}]` — "
+            f"`{e.get('file', '')}:{e.get('line_range', '')}`\n\n"
+        )
+        if e.get("why"):
+            yield sse_chunk(f"⚠️ **Why this is dangerous**\n{e['why']}\n\n")
+        if e.get("vulnerable_snippet"):
+            yield sse_chunk(
+                f"✘ **Vulnerable code**\n```\n{e['vulnerable_snippet'].strip()}\n```\n\n"
+            )
+        if e.get("fixed_snippet"):
+            yield sse_chunk(
+                f"✔ **How to fix it**\n```\n{e['fixed_snippet'].strip()}\n```\n\n"
+            )
+        if e.get("tip"):
+            yield sse_chunk(f"> 💡 **Remember:** {e['tip']}\n\n")

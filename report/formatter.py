@@ -134,6 +134,45 @@ def print_critic(result: dict) -> None:
         console.print(f"\n  [dim italic]{summary}[/dim italic]")
 
 
+def print_explainer(result: dict) -> None:
+    explanations = result.get("explanations", [])
+    if not explanations:
+        return
+    console.print(
+        "\n[bold white on blue] EXPLAIN [/bold white on blue]  "
+        "[bold]Why these matter and how to fix them[/bold]\n"
+    )
+    for i, e in enumerate(explanations, 1):
+        risk = e.get("risk", "low")
+        c = _rc(risk)
+        console.print(
+            f"[bold]{i}. {e.get('issue', e.get('description', 'Finding'))}[/bold]  "
+            f"[{c}][{risk.upper()}][/{c}]  "
+            f"[dim]{e.get('file', '')}:{e.get('line_range', '')}[/dim]"
+        )
+        console.print(f"\n  [yellow]⚠ Why this is dangerous[/yellow]")
+        for line in e.get("why", "").splitlines():
+            console.print(f"    {line}")
+
+        vuln = e.get("vulnerable_snippet", "").strip()
+        if vuln:
+            console.print(f"\n  [red]✘ Vulnerable code[/red]")
+            for line in vuln.splitlines():
+                console.print(f"    [red]{line}[/red]")
+
+        fixed = e.get("fixed_snippet", "").strip()
+        if fixed:
+            console.print(f"\n  [green]✔ How to fix it[/green]")
+            for line in fixed.splitlines():
+                console.print(f"    [green]{line}[/green]")
+
+        tip = e.get("tip", "").strip()
+        if tip:
+            console.print(f"\n  [cyan]💡 Remember:[/cyan] {tip}")
+
+        console.print()
+
+
 def print_footer(report_path: str) -> None:
     console.print()
     console.print("─" * 52)
@@ -202,6 +241,7 @@ def save_markdown(
     checker: dict,
     critic: dict,
     output_path: str = None,
+    explainer: dict = None,
 ) -> str:
     if output_path is None:
         output_path = config.REPORT_FILE
@@ -297,6 +337,37 @@ def save_markdown(
             )
         lines.append("")
 
+    if explainer and explainer.get("explanations"):
+        lines += ["", "---", "", "## Understanding the Findings", ""]
+        for i, e in enumerate(explainer["explanations"], 1):
+            risk = e.get("risk", "low").upper()
+            lines += [
+                f"### {i}. {e.get('issue', 'Finding')} `[{risk}]`",
+                f"**Location:** `{e.get('file', '')}` line {e.get('line_range', '')}",
+                "",
+                f"**Why this is dangerous**",
+                f"{e.get('why', '')}",
+                "",
+            ]
+            if e.get("vulnerable_snippet"):
+                lines += [
+                    "**Vulnerable code**",
+                    "```",
+                    e["vulnerable_snippet"].strip(),
+                    "```",
+                    "",
+                ]
+            if e.get("fixed_snippet"):
+                lines += [
+                    "**How to fix it**",
+                    "```",
+                    e["fixed_snippet"].strip(),
+                    "```",
+                    "",
+                ]
+            if e.get("tip"):
+                lines += [f"> 💡 **Remember:** {e['tip']}", ""]
+
     Path(output_path).write_text("\n".join(lines), encoding="utf-8")
     return output_path
 
@@ -311,6 +382,7 @@ def save_json(
     checker: dict,
     critic: dict,
     output_path: str,
+    explainer: dict = None,
 ) -> str:
     """Write the full run results as a single JSON document."""
     payload = {
@@ -318,10 +390,12 @@ def save_json(
             "target": target,
             "generated": datetime.now().isoformat(timespec="seconds"),
         },
-        "analyst":  {k: v for k, v in analyst.items() if not k.startswith("_")},
-        "checker":  {k: v for k, v in checker.items() if not k.startswith("_")},
-        "critic":   {k: v for k, v in critic.items()  if not k.startswith("_")},
+        "analyst":   {k: v for k, v in analyst.items()  if not k.startswith("_")},
+        "checker":   {k: v for k, v in checker.items()  if not k.startswith("_")},
+        "critic":    {k: v for k, v in critic.items()   if not k.startswith("_")},
     }
+    if explainer:
+        payload["explanations"] = explainer.get("explanations", [])
     Path(output_path).write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return output_path
 
@@ -368,12 +442,49 @@ def _findings_table(findings: list, extra_col: str = None) -> str:
     return f"<table>{header}{rows}</table>"
 
 
+def _explain_html(explainer: dict | None) -> str:
+    if not explainer or not explainer.get("explanations"):
+        return ""
+    rows = ""
+    for i, e in enumerate(explainer["explanations"], 1):
+        risk = e.get("risk", "low")
+        vuln = e.get("vulnerable_snippet", "").strip().replace("<", "&lt;").replace(">", "&gt;")
+        fixed = e.get("fixed_snippet", "").strip().replace("<", "&lt;").replace(">", "&gt;")
+        rows += (
+            f'<div class="explain-card">'
+            f'<h3>{i}. {e.get("issue","Finding")} {_badge(risk)} '
+            f'<span style="font-weight:normal;font-size:.85em">'
+            f'<code>{e.get("file","")}</code> line {e.get("line_range","")}</span></h3>'
+            f'<p><strong>Why this is dangerous</strong><br>{e.get("why","")}</p>'
+        )
+        if vuln:
+            rows += f'<p><strong>✘ Vulnerable code</strong><pre class="bad">{vuln}</pre></p>'
+        if fixed:
+            rows += f'<p><strong>✔ How to fix it</strong><pre class="good">{fixed}</pre></p>'
+        if e.get("tip"):
+            rows += f'<div class="tip">💡 <strong>Remember:</strong> {e["tip"]}</div>'
+        rows += "</div>"
+    return (
+        "<h2>Understanding the Findings</h2>"
+        "<style>"
+        ".explain-card{background:#f8f9fa;border-left:4px solid #3498db;"
+        "padding:14px 18px;margin:16px 0;border-radius:0 6px 6px 0}"
+        "pre.bad{background:#fdecea;padding:10px;border-radius:4px;overflow-x:auto}"
+        "pre.good{background:#eafaf1;padding:10px;border-radius:4px;overflow-x:auto}"
+        ".tip{background:#fffde7;border-left:3px solid #f9a825;"
+        "padding:8px 12px;margin-top:10px;border-radius:0 4px 4px 0}"
+        "</style>"
+        + rows
+    )
+
+
 def save_html(
     target: str,
     analyst: dict,
     checker: dict,
     critic: dict,
     output_path: str,
+    explainer: dict = None,
 ) -> str:
     """Write a self-contained HTML report with inline CSS."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -438,7 +549,7 @@ def save_html(
 
 <h2>Recommendations</h2>
 {recs_html}
-
+{_explain_html(explainer)}
 </body>
 </html>"""
 

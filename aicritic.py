@@ -251,6 +251,16 @@ def main() -> None:
         default=False,
         help="With --fix: create a branch, push, and open a PR with the applied fixes",
     )
+    check_cmd.add_argument(
+        "--explain",
+        action="store_true",
+        default=False,
+        help=(
+            "After the critic stage, explain WHY each finding is dangerous and "
+            "show the exact fixed code for your specific file. "
+            "Ideal for learning — adds ~15s."
+        ),
+    )
 
     # ------------------------------------------------------------------ agent
     agent_cmd = sub.add_parser(
@@ -453,6 +463,15 @@ def main() -> None:
 
     print_critic(critic_filtered)
 
+    # Optional explainer — WHY each finding matters + exact fix for their code
+    explainer_result = None
+    if args.explain and critic_filtered.get("findings"):
+        from pipeline.explainer import run_explainer
+        from report.formatter import print_explainer
+        console.print("\n[dim]  Running Explainer…[/dim]")
+        explainer_result = run_explainer(inputs, critic_filtered)
+        print_explainer(explainer_result)
+
     # Save report
     report_path = save_markdown(
         args.target,
@@ -460,6 +479,7 @@ def main() -> None:
         checker_filtered,
         critic_filtered,
         args.output,
+        explainer=explainer_result,
     )
     print_footer(report_path)
 
@@ -477,12 +497,12 @@ def main() -> None:
 
     # Optional: JSON report
     if args.json_output:
-        jpath = save_json(args.target, analyst_filtered, checker_filtered, critic_filtered, args.json_output)
+        jpath = save_json(args.target, analyst_filtered, checker_filtered, critic_filtered, args.json_output, explainer=explainer_result)
         console.print(f"[bold green]JSON saved:[/bold green] {jpath}\n")
 
     # Optional: HTML report
     if args.html_output:
-        hpath = save_html(args.target, analyst_filtered, checker_filtered, critic_filtered, args.html_output)
+        hpath = save_html(args.target, analyst_filtered, checker_filtered, critic_filtered, args.html_output, explainer=explainer_result)
         console.print(f"[bold green]HTML saved:[/bold green] {hpath}\n")
 
     # Optional: Slack/Teams notifications
