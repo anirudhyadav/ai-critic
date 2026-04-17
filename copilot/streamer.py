@@ -65,6 +65,12 @@ def format_analyst(result: dict):
 
 def format_checker(result: dict):
     yield sse_chunk("\n### [2/3] Gemini — Cross-Check\n\n")
+    if result.get("_skipped"):
+        yield sse_chunk(
+            f"⚠ _Checker stage unavailable_ — {result.get('_skip_reason', 'unknown')}.\n"
+            f"Findings are from analyst only.\n"
+        )
+        return
     for item in result.get("agreements", []):
         yield sse_chunk(f"✓ {item}\n")
     for item in result.get("disagreements", []):

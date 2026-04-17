@@ -151,7 +151,11 @@ _CRITIC_SCHEMA = (
     '    {\n'
     '      "priority": 1,\n'
     '      "action": "<specific remediation step>",\n'
-    '      "risk_addressed": "<high|medium|low>"\n'
+    '      "risk_addressed": "<high|medium|low>",\n'
+    '      "file": "<filename — required if a literal fix is provided>",\n'
+    '      "find": "<exact source string to replace — OPTIONAL, omit if ambiguous>",\n'
+    '      "replace": "<replacement string — OPTIONAL, paired with find>",\n'
+    '      "confidence": "<high|medium|low — confidence the literal fix is safe>"\n'
     '    }\n'
     '  ],\n'
     '  "summary": "<2-3 sentence final verdict>"\n'
@@ -298,7 +302,15 @@ SYSTEM_PROMPTS = {
         '  "role": "critic",\n'
         + _CRITIC_SCHEMA +
         "}\n\n"
-        "Be decisive. Resolve all disagreements. Order recommendations by urgency."
+        "Be decisive. Resolve all disagreements. Order recommendations by urgency.\n\n"
+        "## Literal fixes (find/replace)\n"
+        "When a recommendation is a small, mechanical change you are highly confident about "
+        "(e.g. replacing a hardcoded value with os.environ.get, narrowing 'except Exception' "
+        "to a specific type, adding a missing timeout argument), include `file`, `find`, and "
+        "`replace` so a deterministic patch can be applied without an LLM rewrite. "
+        "`find` MUST appear verbatim exactly once in the named file. "
+        "Set `confidence` to 'high' for these. Omit find/replace for ambiguous, multi-location, "
+        "or architectural changes — those should be described in `action` only."
     ),
 
     # ------------------------------------------------------------------

@@ -80,6 +80,13 @@ def print_analyst(result: dict) -> None:
 
 def print_checker(result: dict) -> None:
     console.print("\n[bold green][[2/3] Gemini[/bold green]  [dim](cross-checker)[/dim]")
+    if result.get("_skipped"):
+        console.print(
+            f"  [yellow]⚠ Checker stage unavailable[/yellow]  "
+            f"[dim]({result.get('_skip_reason', 'unknown')})[/dim]"
+        )
+        console.print("  [dim]Findings are from Sonnet only — treat as unverified.[/dim]")
+        return
     for item in result.get("agreements", []):
         console.print(f"  [green]✓[/green] {item}")
     for item in result.get("disagreements", []):
@@ -138,6 +145,12 @@ def print_footer(report_path: str) -> None:
 
 def print_fixer(result: dict) -> None:
     console.print("\n[bold yellow][[4/4] Fixer[/bold yellow]  [dim](applying recommendations)[/dim]")
+    applied_literal = result.get("applied_literal", [])
+    if applied_literal:
+        console.print(
+            f"  [green]●[/green] [bold]{len(applied_literal)} literal patch(es)[/bold] "
+            f"[dim](deterministic — no LLM rewrite)[/dim]"
+        )
     files = result.get("files", [])
     if not files:
         console.print("  [dim]No changes to apply.[/dim]")
@@ -225,6 +238,12 @@ def save_markdown(
         f"> {checker.get('summary', '')}",
         "",
     ]
+    if checker.get("_skipped"):
+        lines += [
+            f"> ⚠ **Checker stage unavailable** — {checker.get('_skip_reason', 'unknown')}.",
+            "> Findings below are from the analyst only and have not been independently verified.",
+            "",
+        ]
     for item in checker.get("agreements", []):
         lines.append(f"- ✓ {item}")
     for item in checker.get("disagreements", []):

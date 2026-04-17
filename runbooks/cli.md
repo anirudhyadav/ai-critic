@@ -107,6 +107,16 @@ python aicritic.py check ./migrations --tool migration_safety
 python aicritic.py check ./requirements.txt --tool dependency_audit
 ```
 
+### Skip Gemini for faster results
+
+```bash
+# Sonnet → Opus only (~20s instead of ~90s)
+python aicritic.py check ./src --skip-checker
+```
+
+Use this for tight dev-loop iterations or when Gemini is rate-limited.
+The critic is told the cross-check was skipped and applies extra scrutiny.
+
 ### Filter noise — only surface HIGH findings
 
 ```bash
@@ -162,6 +172,7 @@ python aicritic.py check <target> [flags]
 | `--tool NAME` | security_review | Built-in tool profile |
 | `--coverage FILE` | — | coverage.xml from `coverage xml` |
 | `--min-risk LEVEL` | low | Show findings at or above: low / medium / high |
+| `--skip-checker` | off | Skip Gemini cross-check — Sonnet → Opus only (~20s vs ~90s) |
 | `--fix` | off | Run fixer stage after critic |
 | `--dry-run` | off | With `--fix`: show diff only, no writes |
 | `--roles DIR` | roles/ | Custom roles directory (overrides `--tool`) |

@@ -89,6 +89,12 @@ def main() -> None:
         help="Only surface findings at or above this level (overrides critic.md min_risk)",
     )
     check_cmd.add_argument(
+        "--skip-checker",
+        action="store_true",
+        default=False,
+        help="Skip the Gemini cross-check stage — Sonnet → Opus only (faster, less reliable)",
+    )
+    check_cmd.add_argument(
         "--fix",
         action="store_true",
         default=False,
@@ -142,7 +148,7 @@ def main() -> None:
     # --- imports after arg-parse so errors surface cleanly --------------
     from inputs.loader import load_inputs
     from pipeline.analyst import run_analyst
-    from pipeline.checker import run_checker
+    from pipeline.checker import run_checker, skipped_result as checker_skipped
     from pipeline.critic  import run_critic
     from pipeline.fixer   import run_fixer
     from report.formatter import (
@@ -173,13 +179,13 @@ def main() -> None:
         sys.exit(1)
     print_analyst(analyst_result)
 
-    # Step 2 — Gemini
-    console.print("\n[dim]  Running Gemini…[/dim]")
-    try:
+    # Step 2 — Gemini (or skipped via --skip-checker)
+    if args.skip_checker:
+        console.print("\n[dim]  Skipping Gemini (--skip-checker)…[/dim]")
+        checker_result = checker_skipped("disabled via --skip-checker")
+    else:
+        console.print("\n[dim]  Running Gemini…[/dim]")
         checker_result = run_checker(inputs, analyst_result, roles_dir)
-    except Exception as e:
-        console.print(f"[red]Gemini error:[/red] {e}")
-        sys.exit(1)
     print_checker(checker_result)
 
     # Step 3 — Opus

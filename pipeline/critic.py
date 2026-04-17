@@ -35,10 +35,20 @@ def run_critic(
     analyst_json  = json.dumps(analyst_clean, indent=2)
     checker_json  = json.dumps(checker_clean, indent=2)
 
+    checker_skipped = checker_output.get("_skipped")
+    checker_section = (
+        f"# Cross-Checker — UNAVAILABLE\n\n"
+        f"The Gemini cross-check stage was not run "
+        f"(reason: {checker_output.get('_skip_reason', 'unknown')}). "
+        f"Treat the analyst findings as unverified and apply extra scrutiny."
+        if checker_skipped
+        else f"# Cross-Checker Findings (Gemini)\n\n```json\n{checker_json}\n```"
+    )
+
     user_message = (
         f"# Source Code\n\n{source_text}\n\n"
         f"# Primary Analyst Findings (Claude Sonnet)\n\n```json\n{analyst_json}\n```\n\n"
-        f"# Cross-Checker Findings (Gemini)\n\n```json\n{checker_json}\n```"
+        f"{checker_section}"
     )
 
     response = client.chat.completions.create(

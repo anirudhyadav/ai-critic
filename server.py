@@ -105,9 +105,14 @@ async def _pipeline_stream(parsed: dict):
     for chunk in format_analyst(analyst_result):
         yield chunk
 
-    # Step 2 — Gemini
+    # Step 2 — Gemini (returns skipped_result on failure; never raises)
     yield sse_chunk("\n_Running Gemini…_\n\n")
     checker_result = await asyncio.to_thread(run_checker, inputs, analyst_result, roles_dir)
+    if checker_result.get("_skipped"):
+        yield sse_chunk(
+            f"> ⚠ **Checker stage unavailable** — {checker_result.get('_skip_reason')}.\n"
+            f"> Continuing with analyst-only findings.\n\n"
+        )
     for chunk in format_checker(checker_result):
         yield chunk
 
