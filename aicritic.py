@@ -267,10 +267,21 @@ def main() -> None:
     agent_cmd.add_argument("--max-steps", metavar="N", type=int, default=12,
                            dest="max_steps", help="Safety ceiling on tool-call iterations (default 12)")
 
+    sub.add_parser(
+        "cache-clear",
+        help="Delete all cached pipeline results from .aicritic_cache/",
+    )
+
     args = parser.parse_args()
 
     if args.command == "agent":
         _run_agent_cmd(args)
+        sys.exit(0)
+
+    if args.command == "cache-clear":
+        from pipeline.result_cache import clear as cache_clear
+        n = cache_clear()
+        print(f"Cleared {n} cached result(s) from .aicritic_cache/")
         sys.exit(0)
 
     if args.command != "check":

@@ -329,13 +329,15 @@ def _handle_open_pr(args: dict, session: AgentSession) -> str:
     import config
     from report.pr import open_pr_from_fixes, PRError
     title_override = args.get("title")
+    token = session.token or config.GITHUB_TOKEN
     try:
         url = open_pr_from_fixes(
             session.fixer_result,
             session.target,
             session.tool_label,
-            config.GITHUB_TOKEN,
-            summary=title_override or session.critic_result.get("summary", "") if session.critic_result else "",
+            token,
+            summary=title_override or (session.critic_result.get("summary", "") if session.critic_result else ""),
+            critic_result=session.critic_result,
         )
         session.pr_url = url
         session.log(f"open_pr: {url}")

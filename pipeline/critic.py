@@ -3,6 +3,7 @@ from openai import OpenAI
 import config
 from pipeline import parse_llm_json
 from pipeline.batching import build_finding_context
+from pipeline.result_cache import get as cache_get, put as cache_put
 
 
 def run_critic(
@@ -62,6 +63,12 @@ def run_critic(
         f"{checker_section}"
     )
 
+    cached = cache_get("critic", role["model"], system_prompt, user_message)
+    if cached is not None:
+        cached["_role_config"] = role
+        cached["_from_cache"] = True
+        return cached
+
     response = client.chat.completions.create(
         model=role["model"],
         messages=[
@@ -73,5 +80,6 @@ def run_critic(
     )
 
     result = parse_llm_json(response.choices[0].message.content)
+    cache_put("critic", role["model"], system_prompt, user_message, result)
     result["_role_config"] = role
     return result

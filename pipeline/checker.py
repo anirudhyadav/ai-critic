@@ -2,6 +2,7 @@ import json
 from openai import OpenAI
 import config
 from pipeline import parse_llm_json
+from pipeline.result_cache import get as cache_get, put as cache_put
 
 
 _INDEPENDENT_INSTRUCTION = (
@@ -79,6 +80,14 @@ def run_checker(
                 f"# Primary Analyst Findings\n\n```json\n{analyst_json}\n```"
             )
 
+        cached = cache_get("checker", role["model"], system_prompt, user_message)
+        if cached is not None:
+            cached["_role_config"] = role
+            cached["_from_cache"] = True
+            if independent:
+                cached["_independent"] = True
+            return cached
+
         response = client.chat.completions.create(
             model=role["model"],
             messages=[
@@ -90,6 +99,7 @@ def run_checker(
         )
 
         result = parse_llm_json(response.choices[0].message.content)
+        cache_put("checker", role["model"], system_prompt, user_message, result)
     except Exception as e:
         return skipped_result(f"{type(e).__name__}: {e}", role)
 

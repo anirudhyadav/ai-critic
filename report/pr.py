@@ -67,12 +67,88 @@ def _base_branch(cwd: str) -> str:
         return "main"
 
 
+def _parse_end_line(line_range: str) -> int | None:
+    """Return the last line number from a range string like '10-15' or '10'."""
+    try:
+        parts = str(line_range).split("-")
+        return int(parts[-1].strip()) if parts[-1].strip() else int(parts[0].strip())
+    except (ValueError, IndexError):
+        return None
+
+
+def _post_review_comments(
+    api_host: str,
+    owner: str,
+    repo: str,
+    pr_number: int,
+    token: str,
+    critic_result: dict,
+    repo_dir: str,
+) -> None:
+    """Post inline review comments on the PR for each finding. Never raises."""
+    findings = critic_result.get("findings", []) if critic_result else []
+    if not findings:
+        return
+
+    _RISK_BADGE = {"critical": "🔴 CRITICAL", "high": "🟠 HIGH", "medium": "🟡 MEDIUM", "low": "🔵 LOW"}
+
+    comments = []
+    for f in findings:
+        line = _parse_end_line(f.get("line_range", ""))
+        if not line:
+            continue
+        raw_path = f.get("file", "")
+        try:
+            rel_path = os.path.relpath(raw_path, repo_dir) if os.path.isabs(raw_path) else raw_path
+        except ValueError:
+            rel_path = raw_path
+
+        risk = f.get("risk", "low").lower()
+        badge = _RISK_BADGE.get(risk, risk.upper())
+        body = f"**{badge}** — {f.get('description', '(no description)')}"
+        comments.append({"path": rel_path, "line": line, "side": "RIGHT", "body": body})
+
+    if not comments:
+        return
+
+    high_count = sum(1 for f in findings if f.get("risk") in ("high", "critical"))
+    verdict = critic_result.get("verdict", f"{len(findings)} finding(s)")
+    review_body = (
+        f"## aicritic — `{verdict}`\n\n"
+        f"{len(findings)} finding(s) · {high_count} high/critical\n\n"
+        f"> Inline comments below show individual findings."
+    )
+
+    url = f"https://{api_host}/repos/{owner}/{repo}/pulls/{pr_number}/reviews"
+    payload = json.dumps({
+        "body": review_body,
+        "event": "COMMENT",
+        "comments": comments,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        url, data=payload, method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "Content-Type": "application/json",
+            "User-Agent": "aicritic",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30):
+            pass
+    except (urllib.error.HTTPError, urllib.error.URLError):
+        pass  # review comments are best-effort — never break the PR flow
+
+
 def open_pr_from_fixes(
     fixer_result: dict,
     target: str,
     tool_label: str,
     token: str,
     summary: str = "",
+    critic_result: dict | None = None,
 ) -> str:
     """Create branch, commit, push, open PR. Returns the PR URL."""
     if not token:
@@ -145,5 +221,9 @@ def open_pr_from_fixes(
         raise PRError(f"GitHub API returned {e.code}: {detail}") from e
     except urllib.error.URLError as e:
         raise PRError(f"Could not reach GitHub API: {e.reason}") from e
+
+    pr_number = data.get("number")
+    if pr_number and critic_result:
+        _post_review_comments(api_host, owner, repo, pr_number, token, critic_result, repo_dir)
 
     return data.get("html_url", f"(PR created but URL missing — branch {branch})")
