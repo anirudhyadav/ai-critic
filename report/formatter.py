@@ -1,4 +1,5 @@
 import difflib
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -297,4 +298,149 @@ def save_markdown(
         lines.append("")
 
     Path(output_path).write_text("\n".join(lines), encoding="utf-8")
+    return output_path
+
+
+# ---------------------------------------------------------------------------
+# JSON report
+# ---------------------------------------------------------------------------
+
+def save_json(
+    target: str,
+    analyst: dict,
+    checker: dict,
+    critic: dict,
+    output_path: str,
+) -> str:
+    """Write the full run results as a single JSON document."""
+    payload = {
+        "meta": {
+            "target": target,
+            "generated": datetime.now().isoformat(timespec="seconds"),
+        },
+        "analyst":  {k: v for k, v in analyst.items() if not k.startswith("_")},
+        "checker":  {k: v for k, v in checker.items() if not k.startswith("_")},
+        "critic":   {k: v for k, v in critic.items()  if not k.startswith("_")},
+    }
+    Path(output_path).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return output_path
+
+
+# ---------------------------------------------------------------------------
+# HTML report
+# ---------------------------------------------------------------------------
+
+_RISK_BADGE = {
+    "critical": "#c0392b",
+    "high":     "#e74c3c",
+    "medium":   "#e67e22",
+    "low":      "#27ae60",
+}
+
+
+def _badge(risk: str) -> str:
+    color = _RISK_BADGE.get(risk.lower(), "#888")
+    return (
+        f'<span style="background:{color};color:#fff;padding:2px 8px;'
+        f'border-radius:4px;font-size:.8em;font-weight:bold">'
+        f'{risk.upper()}</span>'
+    )
+
+
+def _findings_table(findings: list, extra_col: str = None) -> str:
+    if not findings:
+        return "<p><em>No findings.</em></p>"
+    header = "<tr><th>File</th><th>Lines</th><th>Risk</th>"
+    if extra_col:
+        header += f"<th>{extra_col}</th>"
+    header += "<th>Description</th></tr>"
+    rows = ""
+    for f in findings:
+        rows += (
+            f"<tr>"
+            f"<td><code>{f.get('file','')}</code></td>"
+            f"<td>{f.get('line_range','')}</td>"
+            f"<td>{_badge(f.get('risk','low'))}</td>"
+        )
+        if extra_col:
+            rows += f"<td>{f.get(extra_col.lower(),'')}</td>"
+        rows += f"<td>{f.get('description','')}</td></tr>"
+    return f"<table>{header}{rows}</table>"
+
+
+def save_html(
+    target: str,
+    analyst: dict,
+    checker: dict,
+    critic: dict,
+    output_path: str,
+) -> str:
+    """Write a self-contained HTML report with inline CSS."""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    verdict = critic.get("verdict", "")
+    summary = critic.get("summary", "")
+
+    recs_html = ""
+    for r in critic.get("recommendations", []):
+        recs_html += (
+            f"<li><strong>{r.get('priority','?')}.</strong> "
+            f"{_badge(r.get('risk_addressed','low'))} "
+            f"{r.get('action','')}</li>"
+        )
+    recs_html = f"<ol>{recs_html}</ol>" if recs_html else "<p><em>None.</em></p>"
+
+    checker_note = ""
+    if checker.get("_skipped"):
+        checker_note = (
+            f'<div class="warn">⚠ Checker stage unavailable — '
+            f'{checker.get("_skip_reason","unknown")}. '
+            f'Findings are from the analyst only.</div>'
+        )
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>aicritic Report — {target}</title>
+<style>
+  body {{font-family:system-ui,sans-serif;max-width:1100px;margin:40px auto;padding:0 20px;color:#222}}
+  h1 {{color:#2c3e50}} h2 {{color:#34495e;border-bottom:2px solid #ecf0f1;padding-bottom:6px}}
+  table {{width:100%;border-collapse:collapse;margin:12px 0}}
+  th {{background:#2c3e50;color:#fff;padding:8px 12px;text-align:left}}
+  td {{padding:8px 12px;border-bottom:1px solid #ecf0f1}}
+  tr:hover td {{background:#f8f9fa}}
+  code {{background:#f1f1f1;padding:2px 6px;border-radius:3px;font-size:.9em}}
+  .verdict {{background:#2c3e50;color:#fff;padding:12px 18px;border-radius:6px;margin:12px 0}}
+  .summary {{background:#f8f9fa;border-left:4px solid #3498db;padding:10px 14px;margin:10px 0}}
+  .warn {{background:#fff3cd;border-left:4px solid #ffc107;padding:10px 14px;margin:10px 0}}
+  ol li {{margin:6px 0}}
+  .meta {{color:#888;font-size:.9em}}
+</style>
+</head>
+<body>
+<h1>aicritic Report</h1>
+<p class="meta">Target: <code>{target}</code> &nbsp;|&nbsp; Generated: {now}</p>
+
+<div class="verdict">Overall Verdict: {verdict}</div>
+<div class="summary">{summary}</div>
+
+<h2>[1/3] Claude Sonnet — Primary Analyst</h2>
+<div class="summary">{analyst.get('summary','')}</div>
+{_findings_table(analyst.get('findings', []))}
+
+<h2>[2/3] Gemini — Cross-Checker</h2>
+{checker_note}
+<div class="summary">{checker.get('summary','')}</div>
+{_findings_table(checker.get('findings', []))}
+
+<h2>[3/3] Claude Opus — Critic Verdict</h2>
+{_findings_table(critic.get('findings', []), extra_col="Source")}
+
+<h2>Recommendations</h2>
+{recs_html}
+
+</body>
+</html>"""
+
+    Path(output_path).write_text(html, encoding="utf-8")
     return output_path

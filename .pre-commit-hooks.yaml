@@ -1,0 +1,18 @@
+- id: aicritic-secrets
+  name: aicritic secrets scan
+  description: Scan staged files for hardcoded credentials and API keys
+  language: python
+  entry: python aicritic.py check
+  args: ["--tool", "secrets_scan", "--min-risk", "high", "--skip-checker", "--diff", "HEAD"]
+  types_or: [python, javascript, typescript, go, java, ruby, rust]
+  pass_filenames: false
+
+- id: aicritic-security
+  name: aicritic security review
+  description: Run the full three-model security review on staged files
+  language: python
+  entry: python aicritic.py check
+  args: ["--min-risk", "high", "--skip-checker", "--diff", "HEAD"]
+  types_or: [python, javascript, typescript, go, java, ruby, rust]
+  pass_filenames: false
+  stages: [pre-push]

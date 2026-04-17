@@ -66,9 +66,50 @@ def main() -> None:
         help=(
             "Built-in tool profile to use. "
             "Choices: migration_safety, secrets_scan, code_coverage, error_handling, "
-            "pr_review, test_quality, dependency_audit, performance. "
+            "pr_review, test_quality, dependency_audit, performance, "
+            "dockerfile_review, iac_review. "
             "Defaults to security_review."
         ),
+    )
+    check_cmd.add_argument(
+        "--lang",
+        metavar="LANG",
+        dest="languages",
+        action="append",
+        default=None,
+        help=(
+            "Restrict to this language (can repeat: --lang python --lang typescript). "
+            "Supported: python, javascript, typescript, go, java, ruby, rust, csharp, "
+            "php, kotlin, swift, shell, dockerfile, terraform, yaml, sql."
+        ),
+    )
+    check_cmd.add_argument(
+        "--json",
+        metavar="FILE",
+        default=None,
+        dest="json_output",
+        help="Also write findings as a JSON report to this path",
+    )
+    check_cmd.add_argument(
+        "--html",
+        metavar="FILE",
+        default=None,
+        dest="html_output",
+        help="Also write findings as a self-contained HTML report to this path",
+    )
+    check_cmd.add_argument(
+        "--notify-slack",
+        metavar="URL",
+        default=None,
+        dest="notify_slack",
+        help="Slack Incoming Webhook URL — posts a summary after the critic stage",
+    )
+    check_cmd.add_argument(
+        "--notify-teams",
+        metavar="URL",
+        default=None,
+        dest="notify_teams",
+        help="Microsoft Teams webhook URL — posts a summary after the critic stage",
     )
     check_cmd.add_argument(
         "--coverage",
@@ -156,6 +197,11 @@ def main() -> None:
         parser.print_help()
         sys.exit(0)
 
+    # --- apply .aicritic.yaml project defaults (CLI flags always win) ---
+    import project_config as _pc
+    _project_cfg = _pc.load(args.target)
+    _pc.apply_to_args(args, _project_cfg)
+
     # --- guard: token present -------------------------------------------
     import config
 
@@ -194,13 +240,18 @@ def main() -> None:
         print_header, print_analyst, print_checker,
         print_critic,  print_footer,  print_fixer,
         print_diff,    save_markdown,  filter_by_risk,
+        save_json, save_html,
     )
 
     print_header(args.target)
 
-    # Load files (+ optional coverage XML + optional diff filter)
+    # Load files (+ optional coverage XML + optional diff filter + language filter)
     try:
-        inputs = load_inputs(args.target, args.coverage, diff_ref=args.diff)
+        inputs = load_inputs(
+            args.target, args.coverage,
+            diff_ref=args.diff,
+            languages=args.languages,
+        )
     except (ValueError, FileNotFoundError) as e:
         console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
@@ -209,6 +260,8 @@ def main() -> None:
         console.print(
             f"[dim]  Diff mode: {len(inputs['files'])} file(s) changed since {args.diff}[/dim]"
         )
+    if args.languages:
+        console.print(f"[dim]  Language filter: {', '.join(args.languages)}[/dim]")
 
     tool_label = args.tool or (os.path.basename(args.roles) if args.roles else "security_review")
     console.print(f"[dim]Tool: {tool_label} — {len(inputs['files'])} file(s)[/dim]\n")
@@ -330,6 +383,33 @@ def main() -> None:
         from report.sarif import save_sarif
         sarif_path = save_sarif(critic_filtered, args.target, tool_label, args.sarif)
         console.print(f"[bold green]SARIF saved:[/bold green] {sarif_path}\n")
+
+    # Optional: JSON report
+    if args.json_output:
+        jpath = save_json(args.target, analyst_filtered, checker_filtered, critic_filtered, args.json_output)
+        console.print(f"[bold green]JSON saved:[/bold green] {jpath}\n")
+
+    # Optional: HTML report
+    if args.html_output:
+        hpath = save_html(args.target, analyst_filtered, checker_filtered, critic_filtered, args.html_output)
+        console.print(f"[bold green]HTML saved:[/bold green] {hpath}\n")
+
+    # Optional: Slack/Teams notifications
+    if args.notify_slack:
+        from report.notify import notify_slack
+        try:
+            notify_slack(args.notify_slack, critic_filtered, args.target, tool_label, report_path)
+            console.print("[bold green]Slack notification sent.[/bold green]\n")
+        except RuntimeError as e:
+            console.print(f"[yellow]Slack notification failed:[/yellow] {e}")
+
+    if args.notify_teams:
+        from report.notify import notify_teams
+        try:
+            notify_teams(args.notify_teams, critic_filtered, args.target, tool_label, report_path)
+            console.print("[bold green]Teams notification sent.[/bold green]\n")
+        except RuntimeError as e:
+            console.print(f"[yellow]Teams notification failed:[/yellow] {e}")
 
     # Step 4 (optional) — Fixer
     if not args.fix:

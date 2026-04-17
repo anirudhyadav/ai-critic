@@ -56,7 +56,7 @@ Opus arbitrates once. Progress lines show `[batch 1/3]…`. No flag required.
 
 ## 2. Analysis Tools
 
-Eight built-in tool profiles, each with specialised system prompts for the
+Ten built-in tool profiles, each with specialised system prompts for the
 analyst stage:
 
 | Bucket | Tool | What it checks |
@@ -69,6 +69,8 @@ analyst stage:
 | **Review Depth** | `test_quality` | Meaningless assertions, happy-path-only tests, brittle fixtures |
 | **Codebase Health** | `dependency_audit` | CVEs, outdated packages, licence conflicts, transitive bloat |
 | **Codebase Health** | `performance` | N+1 queries, blocking I/O, inefficient loops, missing caching |
+| **Infrastructure** | `dockerfile_review` | Root user, unpinned tags, baked secrets, bloat, missing health checks |
+| **Infrastructure** | `iac_review` | Overpermissive IAM, public buckets, missing encryption, open security groups |
 
 The Copilot Extension auto-detects the tool from keywords in the user's
 message — no flag required in chat.
@@ -170,14 +172,18 @@ Risk levels: `low` → `medium` → `high` → `critical`
 
 ## 7. Outputs
 
-| Output | Location | Format |
-|--------|----------|--------|
-| Console | Terminal | Rich colour-coded, risk-level highlighted |
-| Report | `aicritic_report.md` (or `--output FILE`) | Markdown — analyst, checker, critic sections |
+| Output | Flag | Format |
+|--------|------|--------|
+| Console | *(always)* | Rich colour-coded, risk-level highlighted |
+| Markdown report | `--output FILE` | Analyst + checker + critic sections |
+| JSON report | `--json FILE` | Full run payload — machine-readable, pipeable |
+| HTML report | `--html FILE` | Self-contained single-file, inline CSS, risk badges |
 | SARIF | `--sarif FILE` | SARIF 2.1.0 JSON for GitHub code-scanning |
 | Baseline | `--save-baseline FILE` | JSON fingerprint list for delta runs |
-| Auto-PR | GitHub | PR with branch, diff, and critic summary |
-| Backup | `.aicritic_backup/<timestamp>/` | Original files before `--fix` is applied |
+| Auto-PR | `--pr` | GitHub PR with branch, diff, and critic summary |
+| Backup | *(with `--fix`)* | Original files under `.aicritic_backup/<timestamp>/` |
+| Slack notification | `--notify-slack URL` | Block-kit message with verdict, top findings |
+| Teams notification | `--notify-teams URL` | Connector card with facts, top findings |
 
 ### SARIF / GitHub code-scanning
 
@@ -254,7 +260,78 @@ while Gemini is still running. No waiting for all three to finish.
 
 ---
 
-## 10. Extensibility
+## 10. Multi-Language Support
+
+aicritic analyses any combination of supported languages — not just Python.
+
+| Language | Extensions |
+|----------|------------|
+| Python | `.py` |
+| JavaScript | `.js`, `.mjs`, `.cjs` |
+| TypeScript | `.ts`, `.tsx` |
+| Go | `.go` |
+| Java | `.java` |
+| Ruby | `.rb` |
+| Rust | `.rs` |
+| C# | `.cs` |
+| PHP | `.php` |
+| Kotlin | `.kt` |
+| Swift | `.swift` |
+| Shell | `.sh`, `.bash` |
+| Dockerfile | `Dockerfile`, `.dockerfile` |
+| Terraform / HCL | `.tf`, `.tfvars` |
+| YAML | `.yml`, `.yaml` |
+| SQL | `.sql` |
+
+### Language filter
+
+```bash
+# Only TypeScript and Python files
+python aicritic.py check ./src --lang typescript --lang python
+
+# Only Dockerfiles
+python aicritic.py check . --tool dockerfile_review --lang dockerfile
+```
+
+### `.aicriticignore`
+
+Place a `.aicriticignore` file at the target directory root to exclude files
+using gitignore-style glob patterns:
+
+```
+# .aicriticignore
+*_test.go
+migrations/
+vendor/
+**/*.generated.py
+```
+
+---
+
+## 11. Project Config File
+
+```yaml
+# .aicritic.yaml — checked into the repo root
+tool: secrets_scan
+min_risk: high
+skip_checker: false
+parallel: true
+languages:
+  - python
+  - typescript
+notify_slack: https://hooks.slack.com/services/YOUR/WEBHOOK/URL
+baseline: .aicritic_baseline.json
+sarif: aicritic.sarif
+```
+
+aicritic searches upward from the target directory for `.aicritic.yaml`.
+CLI flags always override the config file — teams set sensible defaults,
+individuals override per run. No YAML library dependency — uses a built-in
+minimal parser.
+
+---
+
+## 12. Extensibility
 
 ### Custom role profiles
 
@@ -281,7 +358,7 @@ without touching Python code.
 
 ---
 
-## 11. Benchmark Harness
+## 13. Benchmark Harness
 
 ```bash
 python benchmarks/run.py                        # all cases
@@ -302,7 +379,7 @@ without any Python by editing that file and dropping a fixture directory.
 
 ---
 
-## 12. Security — Copilot Extension
+## 14. Security — Copilot Extension
 
 | Feature | Detail |
 |---------|--------|
@@ -313,7 +390,7 @@ without any Python by editing that file and dropping a fixture directory.
 
 ---
 
-## 13. CLI Flags — Quick Reference
+## 15. CLI Flags — Quick Reference
 
 ```
 python aicritic.py check <target> [flags]
@@ -322,6 +399,7 @@ python aicritic.py check <target> [flags]
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--tool NAME` | security_review | Built-in tool profile |
+| `--lang LANG` | all | Language filter (repeatable) |
 | `--coverage FILE` | — | `coverage.xml` from `coverage xml` |
 | `--min-risk LEVEL` | low | `low` / `medium` / `high` — filter threshold |
 | `--skip-checker` | off | Sonnet → Opus only (~20s) |
@@ -333,12 +411,16 @@ python aicritic.py check <target> [flags]
 | `--baseline FILE` | — | Suppress findings already in this baseline |
 | `--save-baseline FILE` | — | Write current findings as a new baseline |
 | `--sarif FILE` | — | Write SARIF 2.1.0 for GitHub code-scanning |
+| `--json FILE` | — | Write full run as JSON |
+| `--html FILE` | — | Write self-contained HTML report |
+| `--notify-slack URL` | — | Post summary to Slack Incoming Webhook |
+| `--notify-teams URL` | — | Post summary to Teams webhook |
 | `--roles DIR` | `roles/` | Custom roles directory |
 | `--output FILE` | `aicritic_report.md` | Markdown report path |
 
 ---
 
-## 14. Prerequisites & Environment Variables
+## 16. Prerequisites & Environment Variables
 
 | Variable | Required | Description |
 |----------|----------|-------------|

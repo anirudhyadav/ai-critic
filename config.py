@@ -43,6 +43,9 @@ TOOLS = [
     # Codebase Health
     "dependency_audit",
     "performance",
+    # Infrastructure
+    "dockerfile_review",
+    "iac_review",
 ]
 
 
@@ -253,6 +256,23 @@ SYSTEM_PROMPTS = {
         "unnecessary loops inside loops, blocking I/O on the main thread, missing caching, "
         "inefficient data structures, and memory allocation patterns that could cause "
         "pressure under load."
+    ),
+
+    # ------------------------------------------------------------------
+    # INFRASTRUCTURE
+    # ------------------------------------------------------------------
+
+    "analyst_dockerfile_review": _analyst_prompt(
+        "You are a Dockerfile security and best-practices analyst. "
+        "Review the provided Dockerfile(s) for security vulnerabilities, bloat, "
+        "and deviations from container hardening best practices."
+    ),
+
+    "analyst_iac_review": _analyst_prompt(
+        "You are an Infrastructure-as-Code security analyst. "
+        "Review the provided Terraform, CloudFormation, Kubernetes YAML, or Pulumi "
+        "files for misconfigurations, overly permissive access controls, missing "
+        "encryption, exposed secrets, and reliability issues."
     ),
 
     # ------------------------------------------------------------------
