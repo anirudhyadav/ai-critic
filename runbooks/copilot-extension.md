@@ -242,8 +242,58 @@ context-window limit, even for long pasted snippets.
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `GITHUB_TOKEN` | Yes | Fine-grained PAT with Copilot Enterprise access |
-| `AICRITIC_DEV_MODE` | Dev only | Set `true` to skip ECDSA signature verification |
+| `GITHUB_TOKEN` | Yes | Fine-grained PAT used as CLI fallback; per-request user token is used for model calls in org deployments |
+| `AICRITIC_DEV_MODE` | Dev only | Set `true` to skip ECDSA signature verification and org membership check |
+| `AICRITIC_ORG` | Org deployments | GitHub org slug — restricts access to org members only. Leave blank to allow any valid Copilot user |
+| `AICRITIC_AUDIT_LOG` | Optional | Absolute or relative path to a JSONL file for structured audit logs. Omit to log to stdout only |
+
+---
+
+## Org deployment
+
+### How it works
+
+When deployed as a Copilot Extension inside an organisation, every request arrives
+with a per-request bearer token in the `Authorization` header. This token belongs
+to the individual employee and is automatically injected by Copilot Chat — no
+separate login is required.
+
+aicritic uses that token for all model calls, so:
+
+- Model usage is billed against the **org's Copilot Enterprise licence**, not a
+  shared service account.
+- `GITHUB_TOKEN` is only used as a fallback (e.g. CLI usage).
+
+### Org membership gate
+
+Set `AICRITIC_ORG=my-org` to restrict access to members of that organisation.
+
+On each request, aicritic:
+
+1. Calls `GET /user` with the per-request token to get the GitHub username.
+2. Calls `GET /orgs/{org}/members/{username}` — HTTP 204 = member, otherwise denied.
+3. Caches the result for **5 minutes** (TTL configurable via `_MEMBERSHIP_TTL` in
+   `copilot/auth.py`) to avoid a GitHub API call on every message.
+4. Returns HTTP 403 with a logged `denied` audit event for non-members.
+
+If `AICRITIC_ORG` is not set, all authenticated Copilot users are allowed.
+
+### Audit log
+
+Every request (allowed or denied) is logged as a JSON line:
+
+```json
+{"ts":"2025-04-17T12:34:56Z","user":"alice","tool":"security_review","files":3,"findings":5,"high_count":2,"agent_mode":false,"duration_ms":4200,"verdict":"HIGH — 2 issues found"}
+```
+
+Denied requests:
+
+```json
+{"ts":"2025-04-17T12:34:00Z","user":"unknown","denied":true,"reason":"invalid_signature"}
+```
+
+Logs always go to the Python logger at `INFO` level. Set `AICRITIC_AUDIT_LOG=./logs/audit.jsonl`
+to also write to a file (one JSON line per request, append mode).
 
 ---
 
@@ -259,6 +309,9 @@ context-window limit, even for long pasted snippets.
 | Empty response in chat | No code block found | Wrap your code in triple backticks |
 | `Could not parse JSON from model response` | Model returned prose | Re-run — usually one-off; persistent issues → check `config.py` system prompts |
 | Slow / no streaming in VS Code | Proxy buffering SSE | Check corporate proxy; SSE requires chunked transfer encoding |
+| `403 Access restricted to org members` | User not in `AICRITIC_ORG` | Add user to the org, or clear `AICRITIC_ORG` to allow all users |
+| Org check passes for removed employees | Membership cache still valid | Cache expires in 5 min; restart server to force immediate eviction |
+| Audit file not growing | Wrong path or permission | Check `AICRITIC_AUDIT_LOG`; ensure the `logs/` directory exists and is writable |
 
 ---
 

@@ -272,13 +272,13 @@ def _handle_run_analysis(args: dict, session: AgentSession) -> str:
         batches = split_into_batches(session.inputs)
         analyst_results, checker_results = [], []
         for batch in batches:
-            a = run_analyst(batch, roles_dir)
-            c = checker_skipped("disabled via agent --skip-checker") if skip_checker else run_checker(batch, a, roles_dir)
+            a = run_analyst(batch, roles_dir, token=session.token)
+            c = checker_skipped("disabled via agent --skip-checker") if skip_checker else run_checker(batch, a, roles_dir, token=session.token)
             analyst_results.append(a)
             checker_results.append(c)
         session.analyst_result = merge_stage_results(analyst_results)
         session.checker_result = merge_stage_results(checker_results)
-        session.critic_result  = run_critic(session.inputs, session.analyst_result, session.checker_result, roles_dir)
+        session.critic_result  = run_critic(session.inputs, session.analyst_result, session.checker_result, roles_dir, token=session.token)
         session.log(f"run_analysis({tool}): {len(session.critic_result.get('findings', []))} finding(s)")
         return session.findings_summary()
     except Exception as e:
@@ -297,7 +297,7 @@ def _handle_apply_fixes(args: dict, session: AgentSession) -> str:
     if not critic_filtered.get("findings") and not critic_filtered.get("recommendations"):
         return f"No findings at or above '{min_risk}' risk — nothing to fix."
     try:
-        session.fixer_result = run_fixer(session.inputs, critic_filtered, session.roles_dir, min_risk)
+        session.fixer_result = run_fixer(session.inputs, critic_filtered, session.roles_dir, min_risk, token=session.token)
     except Exception as e:
         return f"Fixer error: {e}"
 

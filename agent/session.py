@@ -10,6 +10,7 @@ class AgentSession:
     tool_label: str = "security_review"
     roles_dir: Optional[str] = None
     min_risk: str = "low"
+    token: Optional[str] = None        # per-request user token (org Copilot licence)
 
     # Populated as tools execute
     inputs: Optional[dict] = None          # loader output

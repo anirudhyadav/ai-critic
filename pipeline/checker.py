@@ -32,6 +32,7 @@ def run_checker(
     analyst_output: dict = None,
     roles_dir: str = None,
     independent: bool = False,
+    token: str = None,
 ) -> dict:
     """Step 2: Gemini — cross-checker.
 
@@ -49,7 +50,7 @@ def run_checker(
     try:
         client = OpenAI(
             base_url=config.GITHUB_MODELS_BASE_URL,
-            api_key=config.GITHUB_TOKEN,
+            api_key=token or config.GITHUB_TOKEN,
         )
 
         base_prompt = config.SYSTEM_PROMPTS["checker"]

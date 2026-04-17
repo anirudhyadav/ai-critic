@@ -10,6 +10,7 @@ def run_critic(
     analyst_output: dict,
     checker_output: dict,
     roles_dir: str = None,
+    token: str = None,
 ) -> dict:
     """Step 3: Claude Opus — critic/arbiter.
 
@@ -23,7 +24,7 @@ def run_critic(
     """
     client = OpenAI(
         base_url=config.GITHUB_MODELS_BASE_URL,
-        api_key=config.GITHUB_TOKEN,
+        api_key=token or config.GITHUB_TOKEN,
     )
 
     role = config.load_role("critic", roles_dir)

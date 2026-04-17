@@ -88,6 +88,7 @@ def _llm_rewrite(
     findings: list,
     role: dict,
     pre_patched_files: dict,
+    token: str = None,
 ) -> dict:
     """Fall back to LLM-based rewrite for recommendations without literal patches."""
     if not recommendations:
@@ -99,7 +100,7 @@ def _llm_rewrite(
 
     client = OpenAI(
         base_url=config.GITHUB_MODELS_BASE_URL,
-        api_key=config.GITHUB_TOKEN,
+        api_key=token or config.GITHUB_TOKEN,
     )
 
     # Use already-patched content if available — chain literal patches into the LLM context
@@ -144,6 +145,7 @@ def run_fixer(
     critic_output: dict,
     roles_dir: str = None,
     min_risk: str = None,
+    token: str = None,
 ) -> dict:
     """
     Step 4 (optional): Apply critic recommendations to source files.
@@ -181,7 +183,7 @@ def run_fixer(
         f for f in critic_output.get("findings", [])
         if _meets_threshold(f, "risk", threshold)
     ]
-    llm_result = _llm_rewrite(inputs, deferred, findings, role, patched)
+    llm_result = _llm_rewrite(inputs, deferred, findings, role, patched, token=token)
 
     # Merge: LLM-rewritten files override literal-patched ones for the same path
     final_files: dict = {}

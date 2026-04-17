@@ -64,10 +64,10 @@ Be direct and concise. No unnecessary padding. Lead with the most important find
 """
 
 
-def _make_client() -> OpenAI:
+def _make_client(token: Optional[str] = None) -> OpenAI:
     return OpenAI(
         base_url=config.GITHUB_MODELS_BASE_URL,
-        api_key=config.GITHUB_TOKEN,
+        api_key=token or config.GITHUB_TOKEN,
     )
 
 
@@ -77,6 +77,7 @@ def run_agent(
     tool_label: str = "security_review",
     roles_dir: Optional[str] = None,
     min_risk: str = "low",
+    token: Optional[str] = None,
     step_callback: Optional[Callable[[str], None]] = None,
 ) -> tuple[str, AgentSession]:
     """Run the agent synchronously.
@@ -97,8 +98,9 @@ def run_agent(
         tool_label=tool_label,
         roles_dir=roles_dir,
         min_risk=min_risk,
+        token=token,
     )
-    client = _make_client()
+    client = _make_client(token)
 
     # Inject target context so Claude doesn't have to guess
     context = (
@@ -169,6 +171,7 @@ async def stream_agent(
     tool_label: str = "security_review",
     roles_dir: Optional[str] = None,
     min_risk: str = "low",
+    token: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
     """Async generator for streaming agent output (used by Copilot Extension).
 
@@ -188,7 +191,7 @@ async def stream_agent(
         loop = asyncio.get_event_loop()
         reply, _ = await loop.run_in_executor(
             None,
-            lambda: run_agent(task, target, tool_label, roles_dir, min_risk, _callback),
+            lambda: run_agent(task, target, tool_label, roles_dir, min_risk, token, _callback),
         )
         final_reply_holder.append(reply)
         done_event.set()
