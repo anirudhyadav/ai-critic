@@ -337,6 +337,21 @@ def save_markdown(
             )
         lines.append("")
 
+    suppressed = critic.get("_suppressed", [])
+    if suppressed:
+        lines += ["", "---", "", "## Suppressed Findings (accepted-risk)", ""]
+        lines += [
+            "| Risk | File | Lines | Reason |",
+            "|------|------|-------|--------|",
+        ]
+        for f in suppressed:
+            reason = f.get("_suppressed_reason", "accepted-risk")
+            lines.append(
+                f"| {f.get('risk','').upper()} | `{f.get('file','')}` "
+                f"| {f.get('line_range','')} | {reason} |"
+            )
+        lines.append("")
+
     if explainer and explainer.get("explanations"):
         lines += ["", "---", "", "## Understanding the Findings", ""]
         for i, e in enumerate(explainer["explanations"], 1):

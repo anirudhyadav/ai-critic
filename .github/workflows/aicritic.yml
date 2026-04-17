@@ -1,0 +1,58 @@
+# aicritic security gate — copy this file into your repo's .github/workflows/
+#
+# What it does:
+#   1. Runs aicritic on every pull request (changed files only by default)
+#   2. Posts inline annotations on the PR diff for each finding
+#   3. Writes a step summary with a full findings table
+#   4. Fails the check (blocks merge) if any CRITICAL or HIGH finding is found
+#      — configure thresholds in .aicritic-policy.yaml at your repo root
+#
+# Prerequisites:
+#   • GITHUB_TOKEN in repo secrets (Settings → Secrets → Actions)
+#     The default ${{ secrets.GITHUB_TOKEN }} works for most setups.
+#   • Python 3.11+ on the runner (ubuntu-latest includes it)
+#   • aicritic's requirements.txt installed (step below handles this)
+#
+# Customise blocking thresholds by adding .aicritic-policy.yaml:
+#   block_on: [critical, high]   # default
+#   tool: secrets_scan           # override analysis profile
+#   diff_only: true              # only scan changed files (default: true)
+#   skip_checker: false          # skip Gemini cross-check for speed
+
+name: aicritic
+
+on:
+  pull_request:
+    branches: ["**"]
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  security-gate:
+    name: security gate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # full history required for --diff
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install aicritic dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run aicritic CI gate
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AICRITIC_CACHE_TTL: "0"        # always fresh in CI
+        run: python aicritic.py ci .

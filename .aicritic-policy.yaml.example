@@ -1,0 +1,24 @@
+# Copy this file to .aicritic-policy.yaml at your repo root.
+# Controls what aicritic ci blocks on in GitHub Actions.
+
+# Risk levels that fail the CI gate and block the PR merge.
+# Options: critical, high, medium, low
+block_on: [critical, high]
+
+# Analysis profile to use. Leave blank for security_review (default).
+# Options: security_review, secrets_scan, error_handling, performance,
+#          pr_review, test_quality, migration_safety, dependency_audit,
+#          dockerfile_review, iac_review
+tool: security_review
+
+# Minimum risk level to include in the report (does not affect blocking).
+min_risk: low
+
+# true  = only analyse files changed in this PR (recommended for CI speed)
+# false = analyse the entire codebase on every PR
+diff_only: true
+
+# Skip the Gemini cross-check stage for faster CI runs (~20s vs ~90s).
+# Trade-off: slightly less thorough; recommended for large teams with
+# many PRs where speed matters more than maximum coverage.
+skip_checker: false
