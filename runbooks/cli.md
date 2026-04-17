@@ -1,334 +1,296 @@
 # Runbook — aicritic CLI
 
-## Overview
+## Commands
 
-The CLI runs the three-model critic chain locally against a file or directory.
-No server, no GitHub App — just a terminal and a GitHub token.
-
----
-
-## Prerequisites
-
-| Requirement | Version | Notes |
-|-------------|---------|-------|
-| Python | 3.10+ | Check with `python --version` |
-| pip | any | Comes with Python |
-| GitHub account | — | Must have Copilot Enterprise access |
-| GitHub token | — | See Step 2 below |
-
----
-
-## Step 1 — Clone the repository
-
-```bash
-git clone https://github.com/anirudhyadav/ai-critic.git
-cd ai-critic
+```
+aicritic check <target>       Analyse source files
+aicritic ci    <target>       CI gate — exits 1 on blocking findings
+aicritic agent "<task>" <target>  Autonomous agent mode
+aicritic cache-clear          Delete cached pipeline results
 ```
 
 ---
 
-## Step 2 — Create a GitHub token
+## `aicritic check`
 
-1. Go to **github.com → Settings → Developer settings → Personal access tokens → Fine-grained tokens**
-2. Click **Generate new token**
-3. Set expiry (90 days recommended for a demo token)
-4. Under **Permissions** → no special scopes needed — models access is covered by the Copilot Enterprise licence
-5. Click **Generate token** and copy the value
+Full analysis with console output and report file.
 
-> The token only needs to exist under an account with an active Copilot Enterprise seat.
-> It does not need any repository or organisation permissions.
-
----
-
-## Step 3 — Install dependencies
+### Input
 
 ```bash
-pip install -r requirements.txt
+python aicritic.py check <target> [options]
 ```
 
-Installs: `openai`, `python-dotenv`, `rich`, `fastapi`, `uvicorn`, `httpx`, `cryptography`
+`<target>` — a `.py` file or any directory. Subdirectories are walked recursively.
+Non-source files and common noise directories (`__pycache__`, `node_modules`,
+`.venv`, `.git`) are skipped automatically.
 
----
-
-## Step 4 — Configure environment
+### Tool selection
 
 ```bash
-cp .env.example .env
+--tool NAME        Built-in profile (see list below)
+--roles DIR        Directory of custom .md role files (overrides --tool)
 ```
 
-Open `.env` and set your token:
+Available profiles: `security_review` *(default)*, `secrets_scan`,
+`error_handling`, `pr_review`, `performance`, `migration_safety`, `test_quality`,
+`dependency_audit`, `dockerfile_review`, `iac_review`.
 
-```
-GITHUB_TOKEN=ghp_your_token_here
-```
-
----
-
-## Step 5 — Verify the setup
+### Language filter
 
 ```bash
-python aicritic.py --help
+--lang LANG        Restrict to a language (repeatable)
 ```
 
-Expected output:
-```
-usage: aicritic [-h] {check} ...
-
-Route code through three AI models: Sonnet → Gemini → Opus.
-...
-```
-
----
-
-## Running the tool
-
-### Basic security review (default)
+Supported: `python`, `javascript`, `typescript`, `go`, `java`, `ruby`, `rust`,
+`csharp`, `php`, `kotlin`, `swift`, `shell`, `dockerfile`, `terraform`, `yaml`, `sql`.
 
 ```bash
-python aicritic.py check ./demo
+python aicritic.py check . --lang python --lang typescript
 ```
 
-### Run a specific tool
+### Pipeline control
 
 ```bash
-# Scan for hardcoded secrets
-python aicritic.py check ./src --tool secrets_scan
-
-# Check code coverage (requires coverage.xml)
-python aicritic.py check ./src --tool code_coverage --coverage coverage.xml
-
-# Review a pull request
-python aicritic.py check ./src --tool pr_review
-
-# Check DB migrations
-python aicritic.py check ./migrations --tool migration_safety
-
-# Audit dependencies
-python aicritic.py check ./requirements.txt --tool dependency_audit
+--skip-checker     Skip Gemini cross-check (~20s vs ~90s)
+--parallel         Run Sonnet + Gemini simultaneously (independent, not sequential)
 ```
 
-### Skip Gemini for faster results
+### Risk filtering
 
 ```bash
-# Sonnet → Opus only (~20s instead of ~90s)
-python aicritic.py check ./src --skip-checker
+--min-risk LEVEL   Only surface findings at LEVEL and above (low/medium/high)
 ```
 
-Use this for tight dev-loop iterations or when Gemini is rate-limited.
-The critic is told the cross-check was skipped and applies extra scrutiny.
+`--min-risk high` is recommended for pre-commit hooks and noisy codebases.
 
-### Parallel mode — Sonnet and Gemini at the same time
+### Diff mode
 
 ```bash
-# Both analysts run in parallel; Opus arbitrates between independent findings
-python aicritic.py check ./src --parallel
+--diff REF         Only analyse files changed since REF
 ```
-
-Trades the analyst→checker review chain for wall-clock speed.
-Total time ≈ max(Sonnet, Gemini) + Opus instead of all three sequential.
-
-### Large codebases — automatic batching
-
-When the source set is too large for a single LLM call, `aicritic` splits it
-into batches automatically — you'll see `[batch 1/3]…` in the output. The
-analyst and checker run per batch; findings are aggregated before the
-critic runs once. Works transparently with `--parallel`.
-
-No flag needed — batching kicks in above ~40 kB of source code.
-
-### PR-style review — only changed files
 
 ```bash
-# Analyse only the files changed between main and HEAD
-python aicritic.py check . --diff main
-
-# Or against a specific commit
-python aicritic.py check . --diff HEAD~5
+python aicritic.py check src/ --diff main
+python aicritic.py check src/ --diff HEAD~1
+python aicritic.py check src/ --diff origin/main
 ```
 
-Loader filters the file list to `git diff --name-only <ref>...HEAD` — combined
-with `--skip-checker`, you get a ~15-second PR review on every push.
+Uses `git diff --name-only <ref>...HEAD` internally.
 
-### Baseline / delta mode — show only new findings
+### Coverage integration
 
 ```bash
-# First run: save the current state as the baseline
-python aicritic.py check ./src --save-baseline .aicritic_baseline.json
-
-# Later runs: suppress anything already in the baseline
-python aicritic.py check ./src --baseline .aicritic_baseline.json
+--coverage FILE    Path to coverage.xml from `coverage xml`
 ```
 
-Findings are fingerprinted by `(file, line_range, description prefix)`. Ideal
-for legacy codebases — fail the CI build only when *new* HIGH issues appear,
-not when the 200 pre-existing ones do. Combine with `--min-risk high` and a
-non-zero exit code in CI to gate merges on regressions only.
+Passes line-coverage data to the analyst. The `code_coverage` tool profile
+uses this to flag high-risk uncovered paths.
 
-### Auto-fix PR — close the loop from "found it" to "fixed it"
+### Baseline
 
 ```bash
-python aicritic.py check ./src --fix --pr
+--baseline FILE      Suppress findings present in this baseline JSON
+--save-baseline FILE Save current findings as a new baseline
 ```
-
-When you confirm the fixes, aicritic:
-1. Creates a fresh branch `aicritic/fix-<tool>-<timestamp>`
-2. Commits the changed files
-3. Pushes to `origin`
-4. Opens a PR against the default branch via the GitHub REST API
-
-Requires `GITHUB_TOKEN` with `repo` write scope. The PR body lists every
-modified file and echoes the critic's summary.
-
-### CI integration — emit SARIF for GitHub code-scanning
 
 ```bash
-python aicritic.py check ./src --sarif aicritic.sarif
+# First run — save baseline
+python aicritic.py check src/ --save-baseline .aicritic_baseline.json
+
+# Later runs — show only new findings
+python aicritic.py check src/ --baseline .aicritic_baseline.json
 ```
 
-In a GitHub Actions workflow:
-```yaml
-- run: python aicritic.py check ./src --sarif aicritic.sarif --skip-checker
-- uses: github/codeql-action/upload-sarif@v3
-  with:
-    sarif_file: aicritic.sarif
+### Inline suppression
+
+Add a comment in your source to formally dismiss a finding:
+
+```python
+# aicritic: accepted-risk validated upstream in the controller
+cursor.execute(raw_sql)
+
+cursor.execute(raw_sql)  # aicritic: accepted-risk ORM handles escaping
 ```
 
-Findings render as PR annotations and appear in the repo's Security tab.
-Dismissed alerts are tracked across runs by GitHub — free feedback loop.
+Suppressed findings are excluded from output but listed in a separate table
+in the report so leads can audit what has been accepted.
 
-### Filter noise — only surface HIGH findings
+Works in: Python (`#`), JS/Go/Rust (`//`), CSS/SQL block (`/* */`), SQL line (`--`), INI (`;`).
+
+### Output formats
 
 ```bash
-python aicritic.py check ./src --min-risk high
+--output FILE      Markdown report path (default: aicritic_report.md)
+--html   FILE      Also write self-contained HTML report
+--json   FILE      Also write JSON report
+--sarif  FILE      Also write SARIF 2.1.0 for GitHub code scanning
 ```
 
-### Apply fixes automatically
+### Explain mode
 
 ```bash
-# Preview what would change (safe — no files written)
-python aicritic.py check ./src --tool secrets_scan --fix --dry-run
-
-# Apply with confirmation prompt
-python aicritic.py check ./src --tool secrets_scan --fix
-
-# Apply HIGH fixes only
-python aicritic.py check ./src --fix --min-risk high
+--explain          After critic stage, explain WHY + show exact fix for each finding
 ```
 
-The fixer is two-phase:
+Adds a teaching card per finding: concrete attack scenario, your vulnerable code
+verbatim, a corrected version of your specific code, and a one-line rule.
 
-1. **Deterministic literal patches** — applied directly with `str.replace()` when
-   the critic provided `find`/`replace` with `confidence: high` and `find`
-   appears exactly once in the target file. No LLM involved.
-2. **LLM rewrite fallback** — runs only for the leftovers (ambiguous,
-   multi-location, or architectural changes).
-
-You'll see `N literal patch(es) (deterministic)` in the console when phase 1
-applied any patches. Skipped items appear as `→ reason` lines so you always
-know what the fixer declined to touch.
-
-When `--fix` is confirmed, originals are backed up to `.aicritic_backup/<timestamp>/` before any file is written.
-
-### Generate a coverage report first
+### Notifications
 
 ```bash
-pip install coverage pytest
-coverage run -m pytest
-coverage xml          # produces coverage.xml
-
-python aicritic.py check ./src --tool code_coverage --coverage coverage.xml
+--notify-slack URL    Post summary to Slack webhook
+--notify-teams URL   Post summary to Teams webhook
 ```
 
-### Use a custom role profile
+### Fix mode
 
 ```bash
-# Create your own roles directory
-mkdir my-strict-profile
-cp roles/*.md my-strict-profile/
-# edit my-strict-profile/analyst.md → change strictness: high, model: claude-opus-4-5
-
-python aicritic.py check ./src --roles ./my-strict-profile
+--fix              Apply critic recommendations to source files
+--dry-run          Show what --fix would change without writing files
+--pr               With --fix: create branch, push, open GitHub PR with inline comments
+--min-risk LEVEL   Only fix findings at LEVEL and above
 ```
 
----
+**Two-phase fixer:**
+1. Deterministic literal patches (no LLM) for `confidence: high` find/replace pairs.
+2. Claude Sonnet rewrites for ambiguous or multi-location changes.
 
-## All CLI flags
-
-```
-python aicritic.py check <target> [flags]
-```
+### All flags at a glance
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--tool NAME` | security_review | Built-in tool profile |
-| `--coverage FILE` | — | coverage.xml from `coverage xml` |
-| `--min-risk LEVEL` | low | Show findings at or above: low / medium / high |
-| `--skip-checker` | off | Skip Gemini cross-check — Sonnet → Opus only (~20s vs ~90s) |
-| `--parallel` | off | Run Sonnet + Gemini in parallel as independent analyses (~50s vs ~90s) |
-| `--fix` | off | Run fixer stage after critic |
-| `--dry-run` | off | With `--fix`: show diff only, no writes |
-| `--roles DIR` | roles/ | Custom roles directory (overrides `--tool`) |
-| `--output FILE` | aicritic_report.md | Where to save the markdown report |
-| `--sarif FILE` | — | Also write SARIF 2.1.0 JSON for GitHub code-scanning upload |
-| `--diff REF` | — | Only analyse files changed between REF and HEAD (PR-style review) |
-| `--baseline FILE` | — | Suppress findings already present in this baseline JSON |
-| `--save-baseline FILE` | — | Save the current run's findings as a baseline for future `--baseline` calls |
-| `--pr` | off | With `--fix`: create a branch, push, and open a PR via the GitHub REST API |
+| `target` | *(required)* | File or directory to analyse |
+| `--tool` | `security_review` | Built-in tool profile |
+| `--roles` | — | Custom roles directory |
+| `--lang` | all | Language filter (repeatable) |
+| `--diff` | — | Analyse changed files since this git ref |
+| `--coverage` | — | Path to coverage.xml |
+| `--skip-checker` | false | Skip Gemini |
+| `--parallel` | false | Run Sonnet + Gemini in parallel |
+| `--min-risk` | low | Minimum risk to surface |
+| `--baseline` | — | Suppress known findings |
+| `--save-baseline` | — | Save findings as new baseline |
+| `--output` | `aicritic_report.md` | Markdown report path |
+| `--html` | — | HTML report path |
+| `--json` | — | JSON report path |
+| `--sarif` | — | SARIF report path |
+| `--notify-slack` | — | Slack webhook URL |
+| `--notify-teams` | — | Teams webhook URL |
+| `--fix` | false | Apply fixes |
+| `--dry-run` | false | Show fix diff without writing |
+| `--pr` | false | Open GitHub PR with fixes |
+| `--explain` | false | Add teaching cards to findings |
 
 ---
 
-## Built-in tools
+## `aicritic ci`
 
-| Bucket | Tool | What it checks |
-|--------|------|---------------|
-| Ship Safety | `migration_safety` | Data loss, lock contention, missing rollbacks |
-| Ship Safety | `secrets_scan` | Hardcoded credentials, API keys, tokens |
-| Code Confidence | `code_coverage` | Untested paths, missing branch coverage |
-| Code Confidence | `error_handling` | Swallowed exceptions, silent failures |
-| Review Depth | `pr_review` | Regressions, logic errors in changed code |
-| Review Depth | `test_quality` | Meaningless assertions, missing edge cases |
-| Codebase Health | `dependency_audit` | CVEs, outdated packages, licence conflicts |
-| Codebase Health | `performance` | N+1 queries, blocking I/O, inefficient loops |
+CI gate designed for GitHub Actions. Same pipeline as `check` but with CI-specific
+output and a meaningful exit code.
+
+```bash
+python aicritic.py ci <target> [--policy FILE] [--no-diff]
+```
+
+**What it does:**
+1. Loads `.aicritic-policy.yaml` from the target directory (auto-discovered).
+2. Detects the PR base branch from `GITHUB_BASE_REF` (set automatically in Actions).
+3. Runs the pipeline on changed files (or all files with `--no-diff`).
+4. Applies inline suppression comments.
+5. Emits `::error` / `::warning` annotations for every finding.
+6. Writes a Markdown step summary to `$GITHUB_STEP_SUMMARY`.
+7. Exits 1 if blocking findings exist, 0 otherwise.
+
+**Flags:**
+
+| Flag | Description |
+|------|-------------|
+| `target` | Directory to analyse |
+| `--policy FILE` | Explicit path to policy file (default: auto-discover) |
+| `--no-diff` | Analyse all files, not just changed ones |
+
+**Policy defaults** (if no `.aicritic-policy.yaml` is found):
+```
+block_on:     [critical, high]
+diff_only:    true
+min_risk:     low
+skip_checker: false
+tool:         security_review
+```
+
+**Local testing:**
+```bash
+GITHUB_BASE_REF=main python aicritic.py ci src/
+```
 
 ---
 
-## Outputs
+## `aicritic agent`
 
-| Output | Location | Description |
-|--------|----------|-------------|
-| Console | Terminal | Rich-formatted, colour-coded per risk level |
-| Report | `aicritic_report.md` | Markdown version of the full report |
-| Backups | `.aicritic_backup/<timestamp>/` | Originals saved when `--fix` is confirmed |
+Natural-language task runner. See [agent.md](agent.md) for full documentation.
+
+```bash
+python aicritic.py agent "review my PR and fix high-risk issues" src/
+python aicritic.py agent "scan for hardcoded secrets" . --tool secrets_scan
+```
+
+---
+
+## `aicritic cache-clear`
+
+Delete all cached pipeline results.
+
+```bash
+python aicritic.py cache-clear
+```
+
+Removes all `.json` files from `.aicritic_cache/`. Prints the number removed.
+Useful before a clean CI run or after changing role files.
+
+---
+
+## Project config (`.aicritic.yaml`)
+
+Set per-repo defaults. CLI flags always take precedence.
+
+```yaml
+tool: secrets_scan
+min_risk: medium
+skip_checker: false
+parallel: false
+languages:
+  - python
+  - typescript
+baseline: .aicritic_baseline.json
+sarif: aicritic.sarif
+output: reports/aicritic_report.md
+notify_slack: https://hooks.slack.com/services/...
+diff: main
+```
+
+aicritic walks up from the target directory to find the file.
+
+---
+
+## Environment variables
+
+| Variable | Description |
+|----------|-------------|
+| `GITHUB_TOKEN` | Required. Fine-grained PAT with Copilot Enterprise access. |
+| `AICRITIC_DEV_MODE` | `true` skips signature verification (local dev only). |
+| `AICRITIC_CACHE_TTL` | Cache TTL in seconds (default 86400). `0` disables. |
+| `AICRITIC_CACHE_DIR` | Override cache directory (default `.aicritic_cache/`). |
 
 ---
 
 ## Troubleshooting
 
-| Symptom | Likely cause | Fix |
-|---------|-------------|-----|
-| `GITHUB_TOKEN is not set` | Missing `.env` or not exported | Run `cp .env.example .env` and add token |
-| `401 Unauthorized` from API | Token expired or invalid | Regenerate token at github.com → Settings |
-| `No Python source files found` | Wrong target path | Check the path exists and contains `.py` files |
-| `Could not parse coverage XML` | Malformed `coverage.xml` | Regenerate with `coverage xml` after a fresh `coverage run` |
-| `Could not parse JSON from model response` | Model returned prose instead of JSON | Re-run — usually a one-off; if persistent, check system prompt in `config.py` |
-| `⚠ Checker stage unavailable` banner | Gemini API timeout or rate limit | Run continues with analyst-only findings; use `--skip-checker` to suppress the retry attempt next run |
-| Slow (90s+) sequential run | Three sequential LLM calls | Add `--parallel` (~50s) or `--skip-checker` (~20s) |
-| Hangs on a very large repo | Single prompt exceeds context window | Should self-resolve — auto-batching kicks in above ~40 kB; look for `[batch i/N]` progress lines |
-
----
-
-## Demo script (for leadership)
-
-```bash
-# 1. Show the deliberately flawed demo project
-cat demo/auth.py
-
-# 2. Run security review
-python aicritic.py check ./demo
-
-# 3. Run with auto-fix preview
-python aicritic.py check ./demo --fix --dry-run
-
-# 4. Show the saved report
-cat aicritic_report.md
-```
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `GITHUB_TOKEN is not set` | Missing `.env` | `cp .env.example .env` and add token |
+| `401 Unauthorized` | Token expired | Regenerate at github.com → Settings |
+| `Could not parse JSON from model` | Model returned prose | Re-run; one-off; check `config.py` prompts if persistent |
+| `No files to analyse` | Target is empty or all ignored | Check `.aicriticignore`; verify file extensions |
+| Slow first run | No cache yet | Normal; subsequent runs are fast. Use `--skip-checker` for speed |
+| Cache not helping | Files or role changed | Cache key includes content; any change invalidates it |

@@ -2,360 +2,290 @@
 
 ## Overview
 
-The Copilot Extension exposes the same three-model critic chain as a GitHub Copilot Agent.
-Users type `@aicritic check this code` directly in VS Code or GitHub.com Copilot Chat.
-Code is pasted as a fenced block; results stream back into the chat as each model finishes.
+The Copilot Extension exposes aicritic as a GitHub Copilot Agent (`@aicritic`)
+inside VS Code Copilot Chat. Developers type natural language — the server runs
+the full three-model pipeline and streams results back as markdown, including the
+explainer (WHY + exact fix) for every finding.
+
+Requests use the developer's own Copilot bearer token for model calls, so costs
+are billed to the org's existing Copilot Enterprise licence.
+
+---
+
+## How it works
 
 ```
-User types @aicritic in Copilot Chat
+Developer types in VS Code Copilot Chat
+    │
+    ▼ HTTPS + ECDSA signature
+aicritic server (FastAPI)
+    │
+    ├─ Verify GitHub ECDSA signature
+    ├─ Extract user token from Authorization header
+    ├─ Verify org membership (if AICRITIC_ORG is set)
     │
     ▼
-GitHub sends signed POST to your server
+Three-model pipeline (Sonnet → Gemini → Opus)
     │
     ▼
-FastAPI verifies ECDSA signature → parses code blocks → detects tool
+Explainer (WHY + exact fix for each finding)
     │
-    ▼
-[Claude Sonnet]  primary analyst    → streams findings into chat
-    │
-    ▼
-[Gemini]         cross-checker      → streams verification into chat
-    │
-    ▼
-[Claude Opus]    critic / arbiter   → streams final report into chat
+    ▼ Server-Sent Events
+VS Code Copilot Chat (streaming markdown)
 ```
 
 ---
 
-## Prerequisites
+## Setup
 
-| Requirement | Version | Notes |
-|-------------|---------|-------|
-| Python | 3.10+ | Check with `python --version` |
-| GitHub account | — | Must have Copilot Enterprise access |
-| GitHub token | — | Fine-grained PAT (same as CLI) |
-| ngrok | any | Exposes localhost to GitHub during development |
-| GitHub App | — | Created in Step 5 below |
-
----
-
-## Step 1 — Clone and install
+### 1. Start the server
 
 ```bash
-git clone https://github.com/anirudhyadav/ai-critic.git
-cd ai-critic
 pip install -r requirements.txt
-```
-
----
-
-## Step 2 — Create a GitHub token
-
-1. Go to **github.com → Settings → Developer settings → Personal access tokens → Fine-grained tokens**
-2. Click **Generate new token**
-3. Set expiry (90 days recommended)
-4. Under **Permissions** — no special scopes needed; Copilot Enterprise covers model access
-5. Click **Generate token** and copy the value
-
----
-
-## Step 3 — Configure environment
-
-```bash
 cp .env.example .env
-```
+# Set GITHUB_TOKEN in .env
 
-Open `.env` and set:
-
-```
-GITHUB_TOKEN=ghp_your_token_here
-AICRITIC_DEV_MODE=true
-```
-
-> `AICRITIC_DEV_MODE=true` skips GitHub's ECDSA signature check.
-> **Remove or set to `false` before any production deployment.**
-
----
-
-## Step 4 — Start the server
-
-```bash
 uvicorn server:app --reload --port 8000
 ```
 
-Expected output:
-```
-INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
-INFO:     Started reloader process
-```
+### 2. Expose publicly
 
-Verify the health check:
-```bash
-curl http://localhost:8000/
-# {"status":"ok","service":"aicritic"}
-```
-
----
-
-## Step 5 — Expose the server publicly with ngrok
-
-GitHub must be able to reach your server to send requests.
+GitHub needs to reach your server. Use ngrok for local development:
 
 ```bash
 ngrok http 8000
+# Copy the https URL, e.g. https://abc123.ngrok.io
 ```
 
-Note the HTTPS forwarding URL — you will need it in Step 6:
-```
-Forwarding  https://abc123.ngrok.io -> http://localhost:8000
-```
+For production, deploy behind a reverse proxy with a TLS certificate.
 
-> The ngrok URL changes every time you restart ngrok (free tier).
-> Update the GitHub App URLs in Step 6 whenever this happens.
+### 3. Register a GitHub App
+
+1. Go to: **github.com → Settings → Developer settings → GitHub Apps → New GitHub App**
+2. Fill in:
+   - **GitHub App name:** `aicritic` (or your org's name)
+   - **Homepage URL:** `https://abc123.ngrok.io`
+   - **Webhook URL:** `https://abc123.ngrok.io`
+   - **Copilot Agent:** enable → **Callback URL:** `https://abc123.ngrok.io`
+3. Permissions: **Copilot Chat → Read**
+4. Click **Create GitHub App**
+
+### 4. Install the App
+
+- Go to the App settings → **Install App**
+- Install on your account or org
+
+### 5. Use in VS Code
+
+1. Open VS Code → Copilot Chat panel
+2. Type `@aicritic` — the extension appears in the agent list
+3. Start chatting:
+
+```
+@aicritic check this code for SQL injection
+@aicritic review my error handling
+@aicritic scan for hardcoded secrets
+@aicritic @agent review my PR and fix high-risk issues
+```
 
 ---
 
-## Step 6 — Register a GitHub App
+## What you can ask
 
-1. Go to **github.com → Settings → Developer settings → GitHub Apps**
-2. Click **New GitHub App**
-3. Fill in the fields:
-
-| Field | Value |
-|-------|-------|
-| **GitHub App name** | `aicritic` (or any unique name) |
-| **Homepage URL** | your ngrok URL, e.g. `https://abc123.ngrok.io` |
-| **Callback URL** | your ngrok URL |
-| **Webhook URL** | your ngrok URL |
-| **Webhook secret** | leave blank for dev mode |
-
-4. Under **Permissions** → no repository permissions needed
-5. Under **Copilot** (scroll down):
-   - Set **App type** to `Agent`
-   - Set **Inference description** to e.g. `Review code with a three-model AI critic chain`
-   - Set the **Callback URL** to `https://abc123.ngrok.io`
-6. Click **Create GitHub App**
-7. On the App's page, click **Install App** → install on your personal account or organisation
-
----
-
-## Step 7 — Use it in VS Code
-
-1. Open VS Code with the GitHub Copilot extension installed
-2. Open Copilot Chat (`Ctrl+Shift+I` / `Cmd+Shift+I`)
-3. Type `@aicritic` — it should appear as an available agent
-4. Paste code in a fenced block and ask a question:
+### Standard analysis
 
 ```
-@aicritic check this for security issues
+@aicritic check this code
+@aicritic review my error handling
+@aicritic scan for secrets
+@aicritic look at my migration for safety issues
+```
+
+Paste a code block in your message and aicritic will analyse it:
+
+````
+@aicritic check this:
 
 ```python
-def login(user, pwd):
-    query = f"SELECT * FROM users WHERE user='{user}'"
-    db.execute(query)
+def get_user(username):
+    query = f"SELECT * FROM users WHERE name = '{username}'"
+    return db.execute(query)
 ```
+````
+
+### Specific tool profiles
+
+```
+@aicritic check this for security issues         → security_review
+@aicritic scan for hardcoded credentials         → secrets_scan
+@aicritic review my error handling               → error_handling
+@aicritic check this migration                   → migration_safety
+@aicritic review this PR                         → pr_review
+@aicritic check my tests                         → test_quality
+@aicritic audit my dependencies                  → dependency_audit
+@aicritic check this Dockerfile                  → dockerfile_review
+@aicritic review this Terraform                  → iac_review
 ```
 
-Results stream in as each model finishes — Sonnet first, then Gemini, then Opus.
+### Agent mode
+
+Prefix with `@agent` to enable the autonomous tool-use loop:
+
+```
+@aicritic @agent review my PR and fix high-risk issues
+@aicritic @agent scan the changed files and summarise what you find
+@aicritic @agent check what I changed since main
+```
+
+In agent mode, aicritic calls tools autonomously: reading files, running the
+pipeline, applying fixes, and opening PRs — reporting progress step by step.
 
 ---
 
-## Using it on GitHub.com
+## What the response looks like
 
-The same `@aicritic` agent is available in GitHub.com Copilot Chat once the App is installed.
-Navigate to any repository → click the Copilot icon → type `@aicritic`.
+Every response streams in three stages, then automatically runs the explainer:
 
----
+```markdown
+### [1/3] Claude Sonnet — Primary Analysis
+- **HIGH** `db.py:23` — Unsanitized user input passed to SQL query
+- **MEDIUM** `auth.py:45` — Password logged in plaintext
 
-## Tool auto-detection
+### [2/3] Gemini — Cross-Check
+✓ Confirmed: SQL injection at db.py:23
+✗ Disagrees: auth.py:45 is low risk (logging is internal only)
 
-The extension detects which analysis tool to run from keywords in your message.
-No `--tool` flag needed — just describe what you want.
+### [3/3] Claude Opus — Verdict
+**HIGH — 1 confirmed critical issue**
+1. [HIGH] Use parameterized queries in db.py line 23
 
-| Keywords in your message | Tool selected |
-|--------------------------|---------------|
-| secret, credential, hardcoded, api key | `secrets_scan` |
-| coverage, untested, branch coverage | `code_coverage` |
-| migration, alter table, rollback | `migration_safety` |
-| performance, slow, n+1, blocking | `performance` |
-| error handling, exception, timeout | `error_handling` |
-| dependency, requirements, cve, licence | `dependency_audit` |
-| pull request, pr review, regression | `pr_review` |
-| test quality, flaky, assertion | `test_quality` |
-| _(anything else)_ | `security_review` |
+### Why these matter — and how to fix them
 
 ---
 
-## Streaming behaviour
+**1. SQL Injection** `[HIGH]` — `db.py:23`
 
-Each stage streams into the chat as it completes:
+⚠️ **Why this is dangerous**
+An attacker can send ' OR 1=1 -- as the username. Your query returns
+ALL rows and bypasses authentication entirely.
 
+✘ **Vulnerable code**
 ```
-aicritic — security_review
-
----
-
-Running Claude Sonnet…
-**Finding 1** — SQL injection in login() [HIGH]
-...
-
-Running Gemini…
-**Verified:** SQL injection confirmed — also found missing authentication
-...
-
-Running Claude Opus…
-**Final findings — 3 issues**
-| Risk | Finding | File |
-...
-
----
-Analysis complete.
+query = f"SELECT * FROM users WHERE name = '{username}'"
 ```
 
-The user sees Sonnet's findings while Gemini is still running — no waiting for all three to finish.
-
-### Graceful degradation
-
-If the Gemini cross-check stage fails for any reason (rate limit, timeout,
-malformed response, API outage), the pipeline **does not crash**. Instead
-the chat shows:
-
+✔ **How to fix it**
 ```
-> ⚠ Checker stage unavailable — <reason>.
-> Continuing with analyst-only findings.
+cursor.execute("SELECT * FROM users WHERE name = ?", (username,))
 ```
 
-Opus is explicitly told the cross-check was skipped and applies extra
-scrutiny to Sonnet's findings. The user always gets an answer — just a
-flagged one.
-
-### Token efficiency
-
-Opus (the critic stage) does not receive the full pasted code — it gets a
-compact ±5-line window around each flagged line range, plus the analyst
-and checker JSON. This keeps the final stage fast and well under any
-context-window limit, even for long pasted snippets.
-
----
-
-## All environment variables
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `GITHUB_TOKEN` | Yes | Fine-grained PAT used as CLI fallback; per-request user token is used for model calls in org deployments |
-| `AICRITIC_DEV_MODE` | Dev only | Set `true` to skip ECDSA signature verification and org membership check |
-| `AICRITIC_ORG` | Org deployments | GitHub org slug — restricts access to org members only. Leave blank to allow any valid Copilot user |
-| `AICRITIC_AUDIT_LOG` | Optional | Absolute or relative path to a JSONL file for structured audit logs. Omit to log to stdout only |
+> 💡 **Remember:** Never interpolate user input into SQL — use parameterized queries.
+```
 
 ---
 
 ## Org deployment
 
-### How it works
+### Per-request token
 
-When deployed as a Copilot Extension inside an organisation, every request arrives
-with a per-request bearer token in the `Authorization` header. This token belongs
-to the individual employee and is automatically injected by Copilot Chat — no
-separate login is required.
+Each Copilot Chat request carries the user's bearer token in the `Authorization`
+header. aicritic extracts this token and uses it for all model calls — no shared
+service account is needed for model API access.
 
-aicritic uses that token for all model calls, so:
+The `GITHUB_TOKEN` in `.env` is only used as a CLI fallback and for PR operations
+(branch creation, PR API calls).
 
-- Model usage is billed against the **org's Copilot Enterprise licence**, not a
-  shared service account.
-- `GITHUB_TOKEN` is only used as a fallback (e.g. CLI usage).
+### Org membership gating
 
-### Org membership gate
+Set `AICRITIC_ORG` to restrict access to members of a specific organisation:
 
-Set `AICRITIC_ORG=my-org` to restrict access to members of that organisation.
+```bash
+# .env
+AICRITIC_ORG=my-org-name
+```
 
-On each request, aicritic:
+On each request:
+1. aicritic calls `GET /user` with the user's token to get their GitHub login.
+2. Calls `GET /orgs/{org}/members/{username}` — 204 = member, otherwise denied.
+3. Returns HTTP 403 for non-members (logged to audit file).
+4. Caches the result for 5 minutes to avoid repeated GitHub API calls.
 
-1. Calls `GET /user` with the per-request token to get the GitHub username.
-2. Calls `GET /orgs/{org}/members/{username}` — HTTP 204 = member, otherwise denied.
-3. Caches the result for **5 minutes** (TTL configurable via `_MEMBERSHIP_TTL` in
-   `copilot/auth.py`) to avoid a GitHub API call on every message.
-4. Returns HTTP 403 with a logged `denied` audit event for non-members.
+Leave `AICRITIC_ORG` blank to allow any valid Copilot user.
 
-If `AICRITIC_ORG` is not set, all authenticated Copilot users are allowed.
+---
 
-### Audit log
+## Environment variables
 
-Every request (allowed or denied) is logged as a JSON line:
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `GITHUB_TOKEN` | Yes | Fine-grained PAT; CLI fallback and PR operations |
+| `AICRITIC_DEV_MODE` | Dev only | `true` skips ECDSA verification and org check |
+| `AICRITIC_ORG` | Recommended | GitHub org slug — restricts to org members |
+| `AICRITIC_AUDIT_LOG` | Optional | Path to JSONL audit log file |
+| `AICRITIC_CACHE_TTL` | Optional | Cache TTL in seconds (default 86400) |
+
+---
+
+## Audit log
+
+Every request — allowed and denied — is written as a JSON line:
 
 ```json
 {"ts":"2025-04-17T12:34:56Z","user":"alice","tool":"security_review","files":3,"findings":5,"high_count":2,"agent_mode":false,"duration_ms":4200,"verdict":"HIGH — 2 issues found"}
 ```
 
 Denied requests:
-
 ```json
-{"ts":"2025-04-17T12:34:00Z","user":"unknown","denied":true,"reason":"invalid_signature"}
+{"ts":"2025-04-17T12:34:00Z","user":"unknown","denied":true,"reason":"not_org_member"}
 ```
 
-Logs always go to the Python logger at `INFO` level. Set `AICRITIC_AUDIT_LOG=./logs/audit.jsonl`
-to also write to a file (one JSON line per request, append mode).
+Always written to the Python logger (`INFO` level). Set `AICRITIC_AUDIT_LOG` to
+also write to a file. Compatible with Datadog, Splunk, CloudWatch, and `grep`.
 
 ---
 
-## Troubleshooting
+## Production deployment
 
-| Symptom | Likely cause | Fix |
-|---------|-------------|-----|
-| `@aicritic` not visible in VS Code | App not installed or not yet propagated | Re-install App; wait ~1 min; reload VS Code |
-| `401 Invalid request signature` | ECDSA verification failing | Set `AICRITIC_DEV_MODE=true` in `.env` |
-| `GITHUB_TOKEN is not set` | Missing `.env` | Run `cp .env.example .env` and add token |
-| `401 Unauthorized` from model API | Token expired | Regenerate at github.com → Settings |
-| Server not reachable | ngrok URL changed | Re-run `ngrok http 8000`, update GitHub App URLs |
-| Empty response in chat | No code block found | Wrap your code in triple backticks |
-| `Could not parse JSON from model response` | Model returned prose | Re-run — usually one-off; persistent issues → check `config.py` system prompts |
-| Slow / no streaming in VS Code | Proxy buffering SSE | Check corporate proxy; SSE requires chunked transfer encoding |
-| `403 Access restricted to org members` | User not in `AICRITIC_ORG` | Add user to the org, or clear `AICRITIC_ORG` to allow all users |
-| Org check passes for removed employees | Membership cache still valid | Cache expires in 5 min; restart server to force immediate eviction |
-| Audit file not growing | Wrong path or permission | Check `AICRITIC_AUDIT_LOG`; ensure the `logs/` directory exists and is writable |
+Replace ngrok with a permanent HTTPS endpoint:
+
+1. Deploy `server.py` on any host (AWS, GCP, Railway, Render, etc.).
+2. Put it behind a reverse proxy (nginx, Caddy) with a TLS certificate.
+3. Set `AICRITIC_DEV_MODE=false` (or omit entirely).
+4. Update all GitHub App URLs to the production domain.
+5. Set `AICRITIC_ORG` to restrict access to your organisation.
+6. Configure `AICRITIC_AUDIT_LOG` to write to a persistent log path.
+
+```bash
+# Production .env
+GITHUB_TOKEN=ghp_service_account_token
+AICRITIC_DEV_MODE=false
+AICRITIC_ORG=my-org
+AICRITIC_AUDIT_LOG=/var/log/aicritic/audit.jsonl
+```
 
 ---
 
-## Updating the ngrok URL
+## Updating the ngrok URL (free tier)
 
-When ngrok restarts (free tier), update the GitHub App:
+When ngrok restarts it generates a new URL. To update:
 
-1. Get the new URL from `ngrok http 8000` output
-2. Go to **github.com → Settings → Developer settings → GitHub Apps → aicritic → Edit**
+1. `ngrok http 8000` — copy the new URL
+2. Go to: **github.com → Settings → Developer settings → GitHub Apps → aicritic → Edit**
 3. Update **Homepage URL**, **Callback URL**, and **Webhook URL**
 4. Click **Save changes**
 
 ---
 
-## Moving to production
+## Troubleshooting
 
-For a permanent deployment, replace ngrok with a real HTTPS endpoint:
-
-1. Deploy `server.py` behind a reverse proxy (nginx / Caddy) with a TLS certificate
-2. Set `AICRITIC_DEV_MODE=false` (or remove the variable entirely)
-3. Update all GitHub App URLs to the production domain
-4. Rotate `GITHUB_TOKEN` to a long-lived service account token
-
----
-
-## Demo script (for leadership)
-
-```
-# In VS Code Copilot Chat:
-
-@aicritic check this for SQL injection and hardcoded secrets
-
-```python
-import sqlite3
-
-DB_PASSWORD = "admin123"
-
-def get_user(username):
-    conn = sqlite3.connect("users.db")
-    cursor = conn.cursor()
-    query = f"SELECT * FROM users WHERE name = '{username}'"
-    cursor.execute(query)
-    return cursor.fetchone()
-```
-```
-
-Expected: Sonnet flags SQL injection and hardcoded credential → Gemini confirms and adds details → Opus assigns risk levels and prioritises fixes.
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `@aicritic` not visible in VS Code | App not installed or not propagated | Re-install App; wait ~1 min; reload VS Code |
+| `401 Invalid request signature` | ECDSA verification failing | Set `AICRITIC_DEV_MODE=true` for local dev |
+| `403 Access restricted to org members` | User not in `AICRITIC_ORG` | Add user to the org, or clear `AICRITIC_ORG` |
+| `GITHUB_TOKEN is not set` | Missing `.env` | `cp .env.example .env` and add token |
+| `401 Unauthorized` from model API | Token expired or lacks Copilot access | Regenerate token; check Copilot Enterprise scope |
+| Server not reachable | ngrok URL changed | Re-run `ngrok http 8000`; update GitHub App URLs |
+| Empty response in chat | No code block found in message | Wrap code in triple backticks |
+| Org check passes for removed employee | Membership cache still valid | Cache expires in 5 min; restart server to force refresh |
+| Slow first response | No cache yet for this code | Normal; re-runs on unchanged code are fast |
