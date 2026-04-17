@@ -1,25 +1,20 @@
 #!/usr/bin/env python3
-"""
-aicritic — multi-LLM critic chain
-
-Usage:
-    python aicritic.py check ./myproject
-    python aicritic.py check ./myproject --tool code_coverage --coverage coverage.xml
-    python aicritic.py check ./myproject --tool pr_review --min-risk medium
-    python aicritic.py check ./myproject --tool secrets_scan --fix
-    python aicritic.py check ./myproject --tool secrets_scan --fix --dry-run
-    python aicritic.py check ./myproject --roles ./my-custom-roles
-
-Built-in tools:
-  Ship Safety    : migration_safety, secrets_scan
-  Code Confidence: code_coverage, error_handling
-  Review Depth   : pr_review, test_quality
-  Codebase Health: dependency_audit, performance
-"""
+"""aicritic — multi-LLM code critic (Sonnet → Gemini → Opus)"""
 import argparse
 import os
 import sys
 from datetime import datetime
+
+__version__ = "0.1.0"
+
+_EXAMPLES = """
+examples:
+  aicritic "review my PR and fix high-risk issues" src/
+  aicritic check src/ --tool secrets_scan
+  aicritic check src/ --diff main --explain
+  aicritic check src/ --fix --min-risk high
+  aicritic ci src/
+"""
 
 
 def _backup_and_apply(fixer_result: dict, inputs: dict) -> str:
@@ -53,18 +48,10 @@ def _backup_and_apply(fixer_result: dict, inputs: dict) -> str:
 def _run_agent_cmd(args) -> None:
     """Entry point for `aicritic agent <task> <target>`."""
     import config
-    from agent.loop import run_agent, MAX_STEPS
+    from agent.loop import run_agent
     from report.formatter import console
     from rich.panel import Panel
     from rich import box
-
-    if not config.GITHUB_TOKEN:
-        print(
-            "Error: GITHUB_TOKEN is not set.\n"
-            "Add it to a .env file or export it in your shell:\n"
-            "  export GITHUB_TOKEN=ghp_..."
-        )
-        sys.exit(1)
 
     tool_label = args.tool or "security_review"
     roles_dir  = None
@@ -73,7 +60,10 @@ def _run_agent_cmd(args) -> None:
     elif args.tool:
         roles_dir = os.path.join(config.TOOLS_DIR, args.tool)
         if not os.path.isdir(roles_dir):
-            console.print(f"[red]Error:[/red] unknown tool '{args.tool}'. Available: {', '.join(config.TOOLS)}")
+            console.print(
+                f"[red]Error:[/red] unknown tool '{args.tool}'.\n"
+                f"Available: {', '.join(config.TOOLS)}"
+            )
             sys.exit(1)
 
     console.print()
@@ -82,32 +72,32 @@ def _run_agent_cmd(args) -> None:
         box=box.ROUNDED, expand=False,
     ))
     console.print(f"\n[bold]Target:[/bold] {args.target}  [dim]tool={tool_label}  min_risk={args.min_risk}[/dim]")
+    if args.max_steps != 12:
+        console.print(f"[dim]max_steps={args.max_steps}[/dim]")
     console.print("─" * 52 + "\n")
 
     import agent.loop as _agent_loop
-    _agent_loop.MAX_STEPS = args.max_steps  # allow CLI override
+    _agent_loop.MAX_STEPS = args.max_steps
 
     def _progress(msg: str) -> None:
         console.print(f"[dim]{msg}[/dim]")
 
-    final_reply, session = run_agent(
-        task=args.task,
-        target=args.target,
-        tool_label=tool_label,
-        roles_dir=roles_dir,
-        min_risk=args.min_risk,
-        step_callback=_progress,
-    )
+    try:
+        final_reply, session = run_agent(
+            task=args.task,
+            target=args.target,
+            tool_label=tool_label,
+            roles_dir=roles_dir,
+            min_risk=args.min_risk,
+            step_callback=_progress,
+        )
+    except RuntimeError as e:
+        console.print(f"\n[red]Error:[/red] {e}")
+        sys.exit(1)
 
     console.print("\n" + "─" * 52)
     console.print("\n[bold cyan]aicritic[/bold cyan]\n")
     console.print(final_reply)
-    console.print()
-
-    if session.step_log:
-        console.print("[dim]Steps taken:[/dim]")
-        for s in session.step_log:
-            console.print(f"  [dim]✓ {s}[/dim]")
     console.print()
 
 
@@ -346,12 +336,36 @@ def _rewrite_argv_for_shorthand() -> None:
         sys.argv.insert(1, "agent")
 
 
+def _check_token() -> None:
+    """Exit early with a helpful message if GITHUB_TOKEN is missing."""
+    import config as _cfg
+    if not _cfg.GITHUB_TOKEN:
+        print(
+            "Error: GITHUB_TOKEN is not set.\n\n"
+            "aicritic needs a GitHub fine-grained PAT with Copilot Enterprise access.\n\n"
+            "Quick fix:\n"
+            "  1. Generate a token at: github.com → Settings → Developer settings\n"
+            "                          → Personal access tokens → Fine-grained tokens\n"
+            "  2. cp .env.example .env\n"
+            "  3. Add:  GITHUB_TOKEN=ghp_your_token_here\n\n"
+            "Or export it in your shell:\n"
+            "  export GITHUB_TOKEN=ghp_your_token_here"
+        )
+        sys.exit(1)
+
+
 def main() -> None:
     _rewrite_argv_for_shorthand()
 
     parser = argparse.ArgumentParser(
         prog="aicritic",
-        description="Route code through three AI models: Sonnet → Gemini → Opus.",
+        description="Multi-LLM code critic — Sonnet → Gemini → Opus.",
+        epilog=_EXAMPLES,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--version", action="version",
+        version=f"aicritic {__version__}",
     )
     sub = parser.add_subparsers(dest="command")
 
@@ -461,7 +475,7 @@ def main() -> None:
         "--output",
         metavar="FILE",
         default=None,
-        help="Report output path (default: aicritic_report.md)",
+        help="Markdown report path (default: aicritic_report.md)",
     )
     check_cmd.add_argument(
         "--diff",
@@ -538,6 +552,20 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    if args.command is None:
+        parser.print_help()
+        print(
+            "\nGet started:\n"
+            "  aicritic \"review this code for security issues\" src/\n"
+            "  aicritic check src/ --tool secrets_scan\n"
+            "  aicritic check src/ --diff main --explain\n"
+        )
+        sys.exit(0)
+
+    # Token check — fast-fail before any work starts
+    if args.command in ("check", "agent", "ci"):
+        _check_token()
+
     if args.command == "agent":
         _run_agent_cmd(args)
         sys.exit(0)
@@ -561,7 +589,6 @@ def main() -> None:
     _project_cfg = _pc.load(args.target)
     _pc.apply_to_args(args, _project_cfg)
 
-    # --- guard: token present -------------------------------------------
     import config
 
     # Resolve roles directory
@@ -573,19 +600,12 @@ def main() -> None:
         if not os.path.isdir(roles_dir):
             print(
                 f"Error: unknown tool '{args.tool}'.\n"
-                f"Available: {', '.join(config.TOOLS)}"
+                f"Available tools: {', '.join(config.TOOLS)}\n\n"
+                f"Example: aicritic check src/ --tool secrets_scan"
             )
             sys.exit(1)
     else:
         roles_dir = None   # uses config.ROLES_DIR default
-
-    if not config.GITHUB_TOKEN:
-        print(
-            "Error: GITHUB_TOKEN is not set.\n"
-            "Add it to a .env file or export it in your shell:\n"
-            "  export GITHUB_TOKEN=ghp_..."
-        )
-        sys.exit(1)
 
     # --- imports after arg-parse so errors surface cleanly --------------
     from inputs.loader import load_inputs

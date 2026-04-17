@@ -101,7 +101,16 @@ def run_checker(
         result = parse_llm_json(response.choices[0].message.content)
         cache_put("checker", role["model"], system_prompt, user_message, result)
     except Exception as e:
-        return skipped_result(f"{type(e).__name__}: {e}", role)
+        from openai import AuthenticationError, RateLimitError, APIConnectionError
+        if isinstance(e, AuthenticationError):
+            reason = "GITHUB_TOKEN is invalid or expired — check your .env file"
+        elif isinstance(e, RateLimitError):
+            reason = "API rate limit reached — wait a minute and re-run"
+        elif isinstance(e, APIConnectionError):
+            reason = "could not connect to GitHub Models API — check your connection"
+        else:
+            reason = f"{type(e).__name__}: {e}"
+        return skipped_result(reason, role)
 
     result["_role_config"] = role
     if independent:

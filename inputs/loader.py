@@ -39,10 +39,40 @@ for _lang, _exts in LANGUAGE_EXTENSIONS.items():
         else:
             _ALL_BARE_NAMES.add(_e)
 
+_MAX_FILE_BYTES = 500_000   # 500 KB — warn above this, skip above 2 MB
+_SKIP_FILE_BYTES = 2_000_000
 
-def _read_file(path: str) -> dict:
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
-        return {"path": path, "content": f.read()}
+# Bytes that strongly indicate binary content
+_BINARY_CHECK_LEN = 8192
+
+
+def _is_binary(path: str) -> bool:
+    """Quick binary-file check — reads first 8 KB and looks for null bytes."""
+    try:
+        with open(path, "rb") as f:
+            chunk = f.read(_BINARY_CHECK_LEN)
+        return b"\x00" in chunk
+    except OSError:
+        return False
+
+
+def _read_file(path: str) -> dict | None:
+    """Read a source file. Returns None if the file should be skipped."""
+    size = os.path.getsize(path)
+    if size > _SKIP_FILE_BYTES:
+        print(f"  [skipped] {path} — file too large ({size // 1024} KB), increase limit if needed")
+        return None
+    if _is_binary(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8", errors="strict") as f:
+            content = f.read()
+    except UnicodeDecodeError:
+        # Not valid UTF-8 — treat as binary
+        return None
+    if size > _MAX_FILE_BYTES:
+        print(f"  [warning] {path} is large ({size // 1024} KB) — analysis may be less precise")
+    return {"path": path, "content": content}
 
 
 def _load_ignorefile(root: str) -> list:
@@ -63,7 +93,6 @@ def _is_ignored(rel_path: str, patterns: list) -> bool:
     for pat in patterns:
         if fnmatch.fnmatch(rel_path, pat):
             return True
-        # Also match on just the filename
         if fnmatch.fnmatch(os.path.basename(rel_path), pat):
             return True
     return False
@@ -92,7 +121,6 @@ def load_source_files(target: str, languages: list = None) -> list:
     Args:
         target: file or directory.
         languages: optional whitelist e.g. ['python', 'typescript'].
-            When None, all supported extensions are included.
     """
     allowed_exts: set = _ALL_EXTENSIONS
     allowed_names: set = _ALL_BARE_NAMES
@@ -107,10 +135,22 @@ def load_source_files(target: str, languages: list = None) -> list:
                     allowed_names.add(ext)
 
     p = Path(target)
+
+    if not p.exists():
+        raise FileNotFoundError(
+            f"Path not found: '{target}'\n"
+            f"Check the path is correct and try again."
+        )
+
     if p.is_file():
         f = _read_file(str(p))
+        if f is None:
+            raise ValueError(f"Cannot read '{target}' — file is binary or not valid UTF-8.")
         f["language"] = detect_language(str(p))
         return [f]
+
+    if not p.is_dir():
+        raise ValueError(f"'{target}' is neither a file nor a directory.")
 
     ignore_patterns = _load_ignorefile(str(p))
 
@@ -126,15 +166,15 @@ def load_source_files(target: str, languages: list = None) -> list:
             if ignore_patterns and _is_ignored(rel, ignore_patterns):
                 continue
             f = _read_file(full_path)
+            if f is None:
+                continue
             f["language"] = detect_language(full_path)
             files.append(f)
     return files
 
 
 def parse_coverage_xml(xml_path: str) -> dict:
-    """Parse a coverage.xml produced by `coverage xml`.
-    Returns {filename: {line_rate: float, missing_lines: [int, ...]}}
-    """
+    """Parse a coverage.xml produced by `coverage xml`."""
     try:
         tree = ET.parse(xml_path)
     except ET.ParseError as e:
@@ -154,9 +194,7 @@ def parse_coverage_xml(xml_path: str) -> dict:
 
 
 def from_text(files: dict, mode: str = "security") -> dict:
-    """Build an inputs dict from a {filename: content} mapping.
-    Used by the Copilot Extension where code arrives as text, not file paths.
-    """
+    """Build an inputs dict from a {filename: content} mapping."""
     return {
         "files":    [
             {"path": path, "content": content, "language": detect_language(path)}
@@ -174,26 +212,23 @@ def load_inputs(
     diff_ref: str = None,
     languages: list = None,
 ) -> dict:
-    """Main entry point.
+    """Main entry point for loading source files.
 
-    Args:
-        target: file or directory to analyse.
-        coverage_xml: optional coverage.xml path.
-        diff_ref: if set, restrict files to those changed between diff_ref and HEAD.
-        languages: optional language whitelist e.g. ['python', 'typescript'].
-
-    Returns:
-        {
-            "files":    [{path, content, language}, ...],
-            "coverage": {filename: {line_rate, missing_lines}} | None,
-            "mode":     "security" | "coverage",
-            "diff":     {path: [(start, end), ...]} | None,
-        }
+    Raises FileNotFoundError or ValueError with a clear message on failure.
     """
     files = load_source_files(target, languages=languages)
     if not files:
         lang_hint = f" ({', '.join(languages)})" if languages else ""
-        raise ValueError(f"No supported source files{lang_hint} found at: {target}")
+        tip = ""
+        if languages:
+            supported = ", ".join(sorted(LANGUAGE_EXTENSIONS.keys()))
+            tip = f"\n\nSupported languages: {supported}"
+        raise ValueError(
+            f"No source files found at: '{target}'{lang_hint}\n\n"
+            f"aicritic looks for: {', '.join(sorted(_ALL_EXTENSIONS)[:12])} and more.\n"
+            f"If your files are there, check that they aren't excluded by .aicriticignore."
+            f"{tip}"
+        )
 
     diff_map = None
     if diff_ref:
@@ -201,11 +236,16 @@ def load_inputs(
         try:
             changed = set(os.path.abspath(p) for p in changed_files(diff_ref, target))
         except GitDiffError as e:
-            raise ValueError(str(e)) from e
+            raise ValueError(
+                f"Could not get git diff against '{diff_ref}': {e}\n\n"
+                f"Make sure the ref exists: try `git log --oneline {diff_ref}`"
+            ) from e
         files = [f for f in files if os.path.abspath(f["path"]) in changed]
         if not files:
             raise ValueError(
-                f"No supported files changed between '{diff_ref}' and HEAD under '{target}'"
+                f"No source files changed between '{diff_ref}' and HEAD under '{target}'.\n\n"
+                f"This is normal if your current branch hasn't touched any source files yet.\n"
+                f"Run without --diff to analyse everything: aicritic check {target}"
             )
         diff_map = {}
         for f in files:

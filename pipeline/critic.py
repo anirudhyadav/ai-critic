@@ -1,5 +1,5 @@
 import json
-from openai import OpenAI
+from openai import OpenAI, AuthenticationError, RateLimitError, APIConnectionError, APIStatusError
 import config
 from pipeline import parse_llm_json
 from pipeline.batching import build_finding_context
@@ -69,15 +69,36 @@ def run_critic(
         cached["_from_cache"] = True
         return cached
 
-    response = client.chat.completions.create(
-        model=role["model"],
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user",   "content": user_message},
-        ],
-        max_tokens=config.MAX_TOKENS,
-        temperature=config.TEMPERATURE,
-    )
+    try:
+        response = client.chat.completions.create(
+            model=role["model"],
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user",   "content": user_message},
+            ],
+            max_tokens=config.MAX_TOKENS,
+            temperature=config.TEMPERATURE,
+        )
+    except AuthenticationError:
+        raise RuntimeError(
+            "GITHUB_TOKEN is invalid or expired.\n"
+            "Regenerate it at: github.com → Settings → Developer settings → Personal access tokens"
+        )
+    except RateLimitError:
+        raise RuntimeError(
+            "GitHub Models API rate limit reached.\n"
+            "Wait a minute and try again, or add --skip-checker to reduce API calls."
+        )
+    except APIConnectionError:
+        raise RuntimeError(
+            "Could not connect to the GitHub Models API.\n"
+            "Check your internet connection and try again."
+        )
+    except APIStatusError as e:
+        raise RuntimeError(
+            f"GitHub Models API returned an error ({e.status_code}).\n"
+            f"Details: {e.message}"
+        )
 
     result = parse_llm_json(response.choices[0].message.content)
     cache_put("critic", role["model"], system_prompt, user_message, result)
