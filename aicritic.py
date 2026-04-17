@@ -323,7 +323,32 @@ def _ci_summary(
         pass
 
 
+_SUBCOMMANDS = {"check", "ci", "agent", "cache-clear"}
+
+
+def _rewrite_argv_for_shorthand() -> None:
+    """Inject the 'agent' subcommand when the user types:
+
+        aicritic "task description" <target> [flags]
+
+    instead of the explicit form:
+
+        aicritic agent "task description" <target> [flags]
+
+    This lets @aicritic "task" target work as a shell alias.
+    Mutates sys.argv in-place before argparse runs.
+    """
+    if len(sys.argv) < 2:
+        return
+    first = sys.argv[1]
+    # If it looks like a natural-language task (not a known subcommand, not a flag)
+    if first not in _SUBCOMMANDS and not first.startswith("-"):
+        sys.argv.insert(1, "agent")
+
+
 def main() -> None:
+    _rewrite_argv_for_shorthand()
+
     parser = argparse.ArgumentParser(
         prog="aicritic",
         description="Route code through three AI models: Sonnet → Gemini → Opus.",

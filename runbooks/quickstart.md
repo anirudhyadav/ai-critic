@@ -9,7 +9,7 @@ You'll have your first analysis running in under 5 minutes.
 ```bash
 git clone https://github.com/anirudhyadav/ai-critic
 cd ai-critic
-pip install -r requirements.txt
+pip install -e .
 cp .env.example .env
 ```
 
@@ -21,6 +21,15 @@ GITHUB_TOKEN=ghp_your_token_here
 
 **Where to get a token:** github.com → Settings → Developer settings →
 Personal access tokens → Fine-grained tokens. You need Copilot Enterprise access.
+
+**Optional: set up the `@aicritic` alias**
+
+```bash
+# Add to your ~/.zshrc or ~/.bashrc
+source /path/to/ai-critic/aicritic-init.sh
+```
+
+After that, `@aicritic "task" target` works exactly like `aicritic "task" target`.
 
 ---
 
