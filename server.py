@@ -54,7 +54,10 @@ async def copilot_agent(request: Request):
     if not await verify_request(body, key_id, signature):
         raise HTTPException(status_code=401, detail="Invalid request signature")
 
-    data     = json.loads(body)
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
     messages = data.get("messages", [])
     parsed   = parse_request(messages)
 

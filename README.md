@@ -42,7 +42,7 @@ python aicritic.py check ./myproject
 python aicritic.py check ./myproject --tool secrets_scan
 
 # Review and auto-fix findings
-python aicritic.py check ./myproject --tool security_review --fix
+python aicritic.py check ./myproject --tool secrets_scan --fix
 ```
 
 ---

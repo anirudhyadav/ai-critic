@@ -120,7 +120,7 @@ python aicritic.py check ./src --min-risk high
 python aicritic.py check ./src --tool secrets_scan --fix --dry-run
 
 # Apply with confirmation prompt
-python aicritic.py check ./src --tool security_review --fix
+python aicritic.py check ./src --tool secrets_scan --fix
 
 # Apply HIGH fixes only
 python aicritic.py check ./src --fix --min-risk high

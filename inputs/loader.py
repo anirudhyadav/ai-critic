@@ -30,7 +30,10 @@ def parse_coverage_xml(xml_path: str) -> dict:
     Parse a coverage.xml produced by `coverage xml`.
     Returns {filename: {line_rate: float, missing_lines: [int, ...]}}
     """
-    tree = ET.parse(xml_path)
+    try:
+        tree = ET.parse(xml_path)
+    except ET.ParseError as e:
+        raise ValueError(f"Could not parse coverage XML '{xml_path}': {e}") from e
     root = tree.getroot()
     result = {}
     for cls in root.iter("class"):
@@ -39,7 +42,7 @@ def parse_coverage_xml(xml_path: str) -> dict:
         missing = [
             int(line.get("number"))
             for line in cls.iter("line")
-            if line.get("hits") == "0"
+            if line.get("hits") == "0" and line.get("number", "").isdigit()
         ]
         result[filename] = {"line_rate": line_rate, "missing_lines": missing}
     return result

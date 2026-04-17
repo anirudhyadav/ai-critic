@@ -6,7 +6,7 @@ Usage:
     python aicritic.py check ./myproject
     python aicritic.py check ./myproject --tool code_coverage --coverage coverage.xml
     python aicritic.py check ./myproject --tool pr_review --min-risk medium
-    python aicritic.py check ./myproject --tool security_review --fix
+    python aicritic.py check ./myproject --tool secrets_scan --fix
     python aicritic.py check ./myproject --tool secrets_scan --fix --dry-run
     python aicritic.py check ./myproject --roles ./my-custom-roles
 
@@ -18,7 +18,6 @@ Built-in tools:
 """
 import argparse
 import os
-import shutil
 import sys
 from datetime import datetime
 

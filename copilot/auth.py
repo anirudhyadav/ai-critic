@@ -50,5 +50,8 @@ async def verify_request(body: bytes, key_id: str, signature: str) -> bool:
         sig_bytes = base64.b64decode(signature)
         public_key.verify(sig_bytes, body, ECDSA(hashes.SHA256()))
         return True
+    except (ValueError, KeyError, TypeError, httpx.HTTPError):
+        return False
     except Exception:
+        # cryptography library raises its own exception hierarchy; catch-all is intentional
         return False
