@@ -329,6 +329,47 @@ Risk mapping:
 | medium | `warning` | yellow dot |
 | low | `note` | blue dot |
 
+### Delta mode — only fail on new issues
+
+For legacy codebases, you don't want CI to fail on 200 pre-existing findings.
+Use a committed baseline file:
+
+```yaml
+- run: python aicritic.py check ./src
+       --diff ${{ github.event.pull_request.base.ref }}
+       --baseline .aicritic_baseline.json
+       --min-risk high
+       --skip-checker
+```
+
+Generate the baseline once (`--save-baseline .aicritic_baseline.json`) and
+commit it. From then on CI only surfaces findings that weren't in the
+baseline — the delta.
+
+### Auto-fix PR loop
+
+```bash
+python aicritic.py check ./src --fix --pr
+```
+
+Creates a branch, pushes the fixer's changes, and opens a PR via the GitHub
+REST API. Pair with `--min-risk high` and a scheduled workflow to get an
+overnight "fix-the-easy-stuff" bot.
+
+---
+
+## Benchmarks
+
+Measure the pipeline's precision and recall against known-flawed fixtures:
+
+```bash
+python benchmarks/run.py
+python benchmarks/run.py --case sql_injection
+python benchmarks/run.py --output benchmarks/latest.json
+```
+
+See `benchmarks/README.md` for the case format and matching rules.
+
 ---
 
 ## Running as a GitHub Copilot Extension

@@ -124,6 +124,31 @@ def main() -> None:
         default=None,
         help="Report output path (default: aicritic_report.md)",
     )
+    check_cmd.add_argument(
+        "--diff",
+        metavar="REF",
+        default=None,
+        help="Only analyse files changed between REF and HEAD (e.g. main, HEAD~1, origin/main)",
+    )
+    check_cmd.add_argument(
+        "--baseline",
+        metavar="FILE",
+        default=None,
+        help="Suppress findings present in the baseline JSON (shows only new issues)",
+    )
+    check_cmd.add_argument(
+        "--save-baseline",
+        metavar="FILE",
+        default=None,
+        dest="save_baseline",
+        help="Save the current run's findings as a baseline JSON for future --baseline calls",
+    )
+    check_cmd.add_argument(
+        "--pr",
+        action="store_true",
+        default=False,
+        help="With --fix: create a branch, push, and open a PR with the applied fixes",
+    )
 
     args = parser.parse_args()
 
@@ -173,12 +198,17 @@ def main() -> None:
 
     print_header(args.target)
 
-    # Load files (+ optional coverage XML)
+    # Load files (+ optional coverage XML + optional diff filter)
     try:
-        inputs = load_inputs(args.target, args.coverage)
+        inputs = load_inputs(args.target, args.coverage, diff_ref=args.diff)
     except (ValueError, FileNotFoundError) as e:
         console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
+
+    if args.diff:
+        console.print(
+            f"[dim]  Diff mode: {len(inputs['files'])} file(s) changed since {args.diff}[/dim]"
+        )
 
     tool_label = args.tool or (os.path.basename(args.roles) if args.roles else "security_review")
     console.print(f"[dim]Tool: {tool_label} — {len(inputs['files'])} file(s)[/dim]\n")
@@ -263,6 +293,20 @@ def main() -> None:
             f"[dim]  Risk filter active: showing {effective_min_risk.upper()} and above[/dim]"
         )
 
+    # Optional: baseline filter — drop findings already present in a prior run
+    if args.baseline:
+        from report.baseline import load_baseline, filter_new
+        try:
+            baseline_fps = load_baseline(args.baseline)
+            critic_filtered = filter_new(critic_filtered, baseline_fps)
+            suppressed = critic_filtered.get("_baseline_suppressed", 0)
+            console.print(
+                f"[dim]  Baseline: {len(baseline_fps)} known finding(s), "
+                f"{suppressed} suppressed, {len(critic_filtered.get('findings', []))} new[/dim]"
+            )
+        except (OSError, ValueError) as e:
+            console.print(f"[yellow]Warning:[/yellow] could not load baseline: {e}")
+
     print_critic(critic_filtered)
 
     # Save report
@@ -274,6 +318,12 @@ def main() -> None:
         args.output,
     )
     print_footer(report_path)
+
+    # Optional: save baseline for next run
+    if args.save_baseline:
+        from report.baseline import save_baseline
+        bpath = save_baseline(args.save_baseline, critic_result, args.target)
+        console.print(f"[bold green]Baseline saved:[/bold green] {bpath}\n")
 
     # Optional: SARIF for GitHub code-scanning upload
     if args.sarif:
@@ -322,6 +372,23 @@ def main() -> None:
         backup_dir = _backup_and_apply(fixer_result, inputs)
         console.print(f"\n[bold green]✓ Changes applied.[/bold green]")
         console.print(f"[dim]Originals backed up to: {backup_dir}[/dim]\n")
+
+        if args.pr:
+            from report.pr import open_pr_from_fixes, PRError
+            console.print("[dim]  Opening pull request…[/dim]")
+            try:
+                pr_url = open_pr_from_fixes(
+                    fixer_result, args.target, tool_label,
+                    config.GITHUB_TOKEN,
+                    summary=critic_filtered.get("summary", ""),
+                )
+                console.print(f"[bold green]✓ Pull request opened:[/bold green] {pr_url}\n")
+            except PRError as e:
+                console.print(f"[yellow]Could not open PR:[/yellow] {e}")
+                console.print(
+                    "[dim]Fixes are applied locally — push the branch manually "
+                    "if you still want a PR.[/dim]"
+                )
     else:
         console.print("[dim]Changes not applied.[/dim]\n")
 

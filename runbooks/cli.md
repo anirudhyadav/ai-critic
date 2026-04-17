@@ -136,6 +136,49 @@ critic runs once. Works transparently with `--parallel`.
 
 No flag needed — batching kicks in above ~40 kB of source code.
 
+### PR-style review — only changed files
+
+```bash
+# Analyse only the files changed between main and HEAD
+python aicritic.py check . --diff main
+
+# Or against a specific commit
+python aicritic.py check . --diff HEAD~5
+```
+
+Loader filters the file list to `git diff --name-only <ref>...HEAD` — combined
+with `--skip-checker`, you get a ~15-second PR review on every push.
+
+### Baseline / delta mode — show only new findings
+
+```bash
+# First run: save the current state as the baseline
+python aicritic.py check ./src --save-baseline .aicritic_baseline.json
+
+# Later runs: suppress anything already in the baseline
+python aicritic.py check ./src --baseline .aicritic_baseline.json
+```
+
+Findings are fingerprinted by `(file, line_range, description prefix)`. Ideal
+for legacy codebases — fail the CI build only when *new* HIGH issues appear,
+not when the 200 pre-existing ones do. Combine with `--min-risk high` and a
+non-zero exit code in CI to gate merges on regressions only.
+
+### Auto-fix PR — close the loop from "found it" to "fixed it"
+
+```bash
+python aicritic.py check ./src --fix --pr
+```
+
+When you confirm the fixes, aicritic:
+1. Creates a fresh branch `aicritic/fix-<tool>-<timestamp>`
+2. Commits the changed files
+3. Pushes to `origin`
+4. Opens a PR against the default branch via the GitHub REST API
+
+Requires `GITHUB_TOKEN` with `repo` write scope. The PR body lists every
+modified file and echoes the critic's summary.
+
 ### CI integration — emit SARIF for GitHub code-scanning
 
 ```bash
@@ -227,6 +270,10 @@ python aicritic.py check <target> [flags]
 | `--roles DIR` | roles/ | Custom roles directory (overrides `--tool`) |
 | `--output FILE` | aicritic_report.md | Where to save the markdown report |
 | `--sarif FILE` | — | Also write SARIF 2.1.0 JSON for GitHub code-scanning upload |
+| `--diff REF` | — | Only analyse files changed between REF and HEAD (PR-style review) |
+| `--baseline FILE` | — | Suppress findings already present in this baseline JSON |
+| `--save-baseline FILE` | — | Save the current run's findings as a baseline for future `--baseline` calls |
+| `--pr` | off | With `--fix`: create a branch, push, and open a PR via the GitHub REST API |
 
 ---
 

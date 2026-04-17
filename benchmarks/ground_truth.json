@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "description": "Ground-truth findings each case should surface. Matched by file + keyword presence in the critic's description.",
+  "cases": {
+    "sql_injection": {
+      "tool": "security_review",
+      "min_risk": "medium",
+      "expected": [
+        {
+          "file": "app.py",
+          "keywords": ["sql injection", "f-string", "format", "concatenat"],
+          "risk": "high"
+        },
+        {
+          "file": "app.py",
+          "keywords": ["sql injection", "%s", "format"],
+          "risk": "high"
+        }
+      ]
+    },
+    "hardcoded_secret": {
+      "tool": "secrets_scan",
+      "min_risk": "medium",
+      "expected": [
+        {
+          "file": "config.py",
+          "keywords": ["password", "hardcoded"],
+          "risk": "high"
+        },
+        {
+          "file": "config.py",
+          "keywords": ["stripe", "api key", "hardcoded"],
+          "risk": "high"
+        },
+        {
+          "file": "config.py",
+          "keywords": ["aws", "access key"],
+          "risk": "high"
+        }
+      ]
+    },
+    "missing_timeout": {
+      "tool": "error_handling",
+      "min_risk": "low",
+      "expected": [
+        {
+          "file": "fetcher.py",
+          "keywords": ["timeout", "requests.get"],
+          "risk": "medium"
+        },
+        {
+          "file": "fetcher.py",
+          "keywords": ["timeout", "requests.post"],
+          "risk": "medium"
+        }
+      ]
+    }
+  }
+}

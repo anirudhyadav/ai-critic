@@ -64,20 +64,46 @@ def from_text(files: dict, mode: str = "security") -> dict:
     }
 
 
-def load_inputs(target: str, coverage_xml: str = None) -> dict:
+def load_inputs(target: str, coverage_xml: str = None, diff_ref: str = None) -> dict:
     """
     Main entry point.
+
+    Args:
+        target: file or directory to analyse.
+        coverage_xml: optional coverage.xml path.
+        diff_ref: if set, restrict `files` to only those changed between
+            `diff_ref` and HEAD. Useful for PR-style review.
 
     Returns:
         {
             "files":    [{path, content}, ...],
             "coverage": {filename: {line_rate, missing_lines}} | None,
             "mode":     "security" | "coverage",
+            "diff":     {path: [(start, end), ...]} | None,
         }
     """
     files = load_source_files(target)
     if not files:
         raise ValueError(f"No Python source files found at: {target}")
+
+    diff_map = None
+    if diff_ref:
+        from inputs.git_diff import changed_files, changed_line_ranges, GitDiffError
+        try:
+            changed = set(os.path.abspath(p) for p in changed_files(diff_ref, target))
+        except GitDiffError as e:
+            raise ValueError(str(e)) from e
+        files = [f for f in files if os.path.abspath(f["path"]) in changed]
+        if not files:
+            raise ValueError(
+                f"No .py files changed between '{diff_ref}' and HEAD under '{target}'"
+            )
+        diff_map = {}
+        for f in files:
+            try:
+                diff_map[f["path"]] = changed_line_ranges(diff_ref, f["path"])
+            except GitDiffError:
+                diff_map[f["path"]] = []
 
     coverage = None
     mode = "security"
@@ -85,4 +111,4 @@ def load_inputs(target: str, coverage_xml: str = None) -> dict:
         coverage = parse_coverage_xml(coverage_xml)
         mode = "coverage"
 
-    return {"files": files, "coverage": coverage, "mode": mode}
+    return {"files": files, "coverage": coverage, "mode": mode, "diff": diff_map}
