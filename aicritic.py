@@ -50,6 +50,67 @@ def _backup_and_apply(fixer_result: dict, inputs: dict) -> str:
     return backup_dir
 
 
+def _run_agent_cmd(args) -> None:
+    """Entry point for `aicritic agent <task> <target>`."""
+    import config
+    from agent.loop import run_agent, MAX_STEPS
+    from report.formatter import console
+    from rich.panel import Panel
+    from rich import box
+
+    if not config.GITHUB_TOKEN:
+        print(
+            "Error: GITHUB_TOKEN is not set.\n"
+            "Add it to a .env file or export it in your shell:\n"
+            "  export GITHUB_TOKEN=ghp_..."
+        )
+        sys.exit(1)
+
+    tool_label = args.tool or "security_review"
+    roles_dir  = None
+    if args.roles:
+        roles_dir = args.roles
+    elif args.tool:
+        roles_dir = os.path.join(config.TOOLS_DIR, args.tool)
+        if not os.path.isdir(roles_dir):
+            console.print(f"[red]Error:[/red] unknown tool '{args.tool}'. Available: {', '.join(config.TOOLS)}")
+            sys.exit(1)
+
+    console.print()
+    console.print(Panel(
+        f"[bold cyan]aicritic agent[/bold cyan]\n[dim]{args.task}[/dim]",
+        box=box.ROUNDED, expand=False,
+    ))
+    console.print(f"\n[bold]Target:[/bold] {args.target}  [dim]tool={tool_label}  min_risk={args.min_risk}[/dim]")
+    console.print("─" * 52 + "\n")
+
+    import agent.loop as _agent_loop
+    _agent_loop.MAX_STEPS = args.max_steps  # allow CLI override
+
+    def _progress(msg: str) -> None:
+        console.print(f"[dim]{msg}[/dim]")
+
+    final_reply, session = run_agent(
+        task=args.task,
+        target=args.target,
+        tool_label=tool_label,
+        roles_dir=roles_dir,
+        min_risk=args.min_risk,
+        step_callback=_progress,
+    )
+
+    console.print("\n" + "─" * 52)
+    console.print("\n[bold cyan]aicritic[/bold cyan]\n")
+    console.print(final_reply)
+    console.print()
+
+    if session.step_log:
+        console.print("[dim]Steps taken:[/dim]")
+        for s in session.step_log:
+            console.print(f"  [dim]✓ {s}[/dim]")
+    console.print()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="aicritic",
@@ -191,7 +252,26 @@ def main() -> None:
         help="With --fix: create a branch, push, and open a PR with the applied fixes",
     )
 
+    # ------------------------------------------------------------------ agent
+    agent_cmd = sub.add_parser(
+        "agent",
+        help="Autonomous agent — give a task in natural language, Claude does the rest",
+    )
+    agent_cmd.add_argument("task", help='Natural language task e.g. "review my PR and fix high-risk issues"')
+    agent_cmd.add_argument("target", help="Path to a .py file or directory")
+    agent_cmd.add_argument("--tool", metavar="NAME", default=None,
+                           help="Default analysis tool profile (overridden by agent if task implies another)")
+    agent_cmd.add_argument("--min-risk", metavar="LEVEL", choices=["low", "medium", "high"],
+                           default="low", dest="min_risk")
+    agent_cmd.add_argument("--roles", metavar="DIR", default=None)
+    agent_cmd.add_argument("--max-steps", metavar="N", type=int, default=12,
+                           dest="max_steps", help="Safety ceiling on tool-call iterations (default 12)")
+
     args = parser.parse_args()
+
+    if args.command == "agent":
+        _run_agent_cmd(args)
+        sys.exit(0)
 
     if args.command != "check":
         parser.print_help()

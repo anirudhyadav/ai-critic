@@ -27,6 +27,8 @@ from copilot.streamer import (
 )
 from report.formatter import filter_by_risk
 
+_AGENT_TRIGGER = "@agent"   # user adds this to enable agentic mode in chat
+
 app = FastAPI(title="aicritic", description="Multi-LLM critic chain — Copilot Extension")
 
 
@@ -60,6 +62,23 @@ async def copilot_agent(request: Request):
         raise HTTPException(status_code=400, detail="Invalid JSON body")
     messages = data.get("messages", [])
     parsed   = parse_request(messages)
+
+    # Detect agent mode: user typed "@aicritic @agent <task>" or just "@agent <task>"
+    raw_text = " ".join(
+        m.get("content", "") for m in messages if m.get("role") == "user"
+    ).lower()
+    agent_mode = _AGENT_TRIGGER in raw_text
+
+    if agent_mode:
+        # Extract task (everything after @agent)
+        task_text = raw_text.split(_AGENT_TRIGGER, 1)[-1].strip() or "review the provided code"
+        # Use a temp directory for code from chat — write snippet files to /tmp
+        snippet_dir = _write_snippets(parsed.get("inputs"))
+        return StreamingResponse(
+            _agent_stream(task_text, snippet_dir, parsed.get("tool", "security_review")),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     # No code found — ask the user to paste some
     if parsed.get("error") or not parsed.get("inputs"):
@@ -129,6 +148,32 @@ async def _pipeline_stream(parsed: dict):
         yield chunk
 
     yield sse_chunk("\n\n---\n_Analysis complete._\n")
+    yield sse_done()
+
+
+def _write_snippets(inputs: dict | None) -> str:
+    """Write code snippets from chat to a temp directory so the agent can load them."""
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="aicritic_agent_")
+    if inputs:
+        for f in inputs.get("files", []):
+            path = os.path.join(tmp, os.path.basename(f.get("path", "snippet.py")))
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(f.get("content", ""))
+    return tmp
+
+
+async def _agent_stream(task: str, target: str, tool_label: str):
+    """Stream agent progress and final reply as SSE."""
+    from agent.loop import stream_agent
+
+    yield sse_start()
+    yield sse_chunk(f"**aicritic agent** — _{task}_\n\n---\n\n")
+
+    async for chunk in stream_agent(task, target, tool_label):
+        yield sse_chunk(chunk)
+
+    yield sse_chunk("\n\n---\n_Agent run complete._\n")
     yield sse_done()
 
 

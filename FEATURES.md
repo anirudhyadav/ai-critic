@@ -5,6 +5,72 @@ through outputs, surfaces, CI integration, and extensibility.
 
 ---
 
+## 0. Agent Mode *(new)*
+
+The highest-level surface: give aicritic a task in plain English; Claude Opus
+drives the pipeline autonomously using tool-use until the task is done.
+
+```bash
+# Review changed files and fix anything high-risk
+python aicritic.py agent "review my PR and fix high-risk issues" . --min-risk high
+
+# Full security scan with auto-PR
+python aicritic.py agent "scan for secrets and open a PR with fixes" ./src --tool secrets_scan
+
+# Verify fixes with tests before opening PR
+python aicritic.py agent "check error handling, fix it, run pytest, then open a PR" ./src
+```
+
+In Copilot Chat, append `@agent` to hand control to the agent loop:
+
+```
+@aicritic @agent review my changes and fix the critical issues
+```
+
+### How it works
+
+```
+User task (natural language)
+    │
+    ▼
+Claude Opus — decides what to do next
+    │
+    ├─ get_changed_files(ref)   → loads only changed files
+    ├─ read_files(lang?)        → loads full target
+    ├─ run_analysis(tool)       → Sonnet → Gemini → Opus pipeline
+    ├─ apply_fixes(min_risk)    → deterministic patches + LLM rewrite
+    ├─ run_shell(command)       → linter / tests / syntax check
+    ├─ open_pr(title?)          → branch + push + GitHub PR
+    ├─ read_file / write_file   → targeted single-file edits
+    └─ save_baseline(path)      → persist current findings
+    │
+    ▼
+Final summary — what was found, fixed, and where the PR is
+```
+
+### Available agent tools
+
+| Tool | What it does |
+|------|-------------|
+| `get_changed_files(ref)` | Load files changed since `ref` (git diff) |
+| `read_files(languages?)` | Load all source files in the target |
+| `run_analysis(tool?, skip_checker?)` | Run the full 3-model pipeline |
+| `apply_fixes(min_risk?)` | Apply critic recommendations to disk |
+| `open_pr(title?)` | Push branch + open GitHub PR |
+| `read_file(path)` | Read a single file |
+| `write_file(path, content)` | Write a single file |
+| `run_shell(command, timeout?)` | Run linter / tests / syntax check |
+| `save_baseline(path?)` | Save findings fingerprints for future delta runs |
+
+### Safety limits
+
+- `--max-steps N` (default 12) — hard ceiling on tool-call iterations
+- Fixes are backed up to `.aicritic_backup/<timestamp>/` before any write
+- `open_pr` is only called when the task explicitly requests a PR
+- `run_shell` is sandboxed to the target directory
+
+---
+
 ## 1. Core Pipeline
 
 ### Three-model critic chain
