@@ -1,160 +1,130 @@
-# Runbook — Org Deployment
+# Org Deployment
 
-## Overview
-
-This runbook covers deploying aicritic as a shared Copilot Extension for an
-entire organisation. The goal: every developer in the org can type `@aicritic`
-in VS Code Copilot Chat, backed by the org's existing Copilot Enterprise licence —
-no individual API keys, no per-developer setup.
+Deploy aicritic as a shared `@aicritic` agent for your whole organisation.
+Every developer gets it in VS Code Copilot Chat. Model calls are billed to
+your existing Copilot Enterprise licence — no individual API keys, no per-seat setup.
 
 ---
 
-## Architecture
+## How it works
 
 ```
-Developer → VS Code Copilot Chat
-                │
-                │ HTTPS request + user's Copilot bearer token
-                ▼
-        aicritic server (FastAPI)
-                │
-                ├─ Verify ECDSA signature  (GitHub signs every request)
-                ├─ Extract user token from Authorization header
-                ├─ Check org membership    (AICRITIC_ORG)
-                ├─ Log to audit file       (AICRITIC_AUDIT_LOG)
-                │
-                ▼ model API calls using the USER's token
-        GitHub Models API (Azure endpoint)
-                │
-                └─► billed to org's Copilot Enterprise licence
+Developer types @aicritic in VS Code
+        │
+        │ HTTPS + ECDSA signature
+        ▼
+  aicritic server
+        ├─ Verify GitHub's signature
+        ├─ Extract the user's Copilot bearer token
+        ├─ Check org membership
+        ├─ Log to audit file
+        │
+        ▼ model calls using the USER's own token
+  GitHub Models API
+        │
+        └─► billed to org's Copilot Enterprise licence
 ```
 
-**Key properties:**
-- Each developer's model calls use their own Copilot token — not a shared key.
-- The `GITHUB_TOKEN` in `.env` is only used for PR operations (branch/push/PR API).
-- Access is gated by org membership — non-members get HTTP 403.
-- Every request is logged for compliance and usage analytics.
+Each developer's API usage is billed under their own seat.
+The `GITHUB_TOKEN` in `.env` is only used for PR operations (push, PR API calls).
 
 ---
 
-## Prerequisites
+## Before you start
 
-| Item | Details |
-|------|---------|
-| GitHub Copilot Enterprise | Org must have Copilot Enterprise (not Individual) |
-| Python 3.11+ | On the deployment host |
-| Persistent HTTPS endpoint | Public domain with TLS certificate |
-| Service account | GitHub account for the GitHub App; needs Copilot access |
-| Org admin access | To register the GitHub App and install on the org |
+You need:
+- GitHub **Copilot Enterprise** licence for the org (not Individual)
+- A persistent HTTPS endpoint (public domain with TLS)
+- A GitHub service account (machine user) with Copilot access
+- Org admin access to register a GitHub App
 
 ---
 
-## Step 1: Deploy the server
+## Step 1 — Deploy the server
 
-### Option A: Simple server (Railway / Render / Fly.io)
+Pick your deployment option:
 
-```bash
-# Clone and push to your deployment platform
-git clone https://github.com/anirudhyadav/ai-critic
-cd ai-critic
-# Follow your platform's deploy instructions
-# Set environment variables in the platform dashboard
-```
-
-### Option B: Docker
-
-```dockerfile
-FROM python:3.11-slim
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install -r requirements.txt
-COPY . .
-CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000"]
-```
-
+**Docker:**
 ```bash
 docker build -t aicritic .
 docker run -p 8000:8000 --env-file .env aicritic
 ```
 
-### Option C: VM / bare metal
-
+**Railway / Render / Fly.io:**
 ```bash
-pip install -r requirements.txt
-# Use a process manager to keep it running
-gunicorn server:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
-
-# Or with systemd
-# Create /etc/systemd/system/aicritic.service
+git clone https://github.com/anirudhyadav/ai-critic
+# Push to your platform and set environment variables in the dashboard
 ```
 
-The server must be accessible at a stable public HTTPS URL.
+**VM / bare metal:**
+```bash
+pip install -r requirements.txt
+gunicorn server:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
+```
+
+The server must be reachable at a stable public HTTPS URL before the next step.
 
 ---
 
-## Step 2: Configure environment
+## Step 2 — Configure environment
 
-Create a `.env` file on the server (or set variables in your hosting platform):
+On the server (or in your hosting platform's env var settings):
 
 ```bash
 # Required
-GITHUB_TOKEN=ghp_service_account_token_here
+GITHUB_TOKEN=ghp_service_account_token
 
-# Security — disable dev mode in production
+# Disable dev mode in production
 AICRITIC_DEV_MODE=false
 
-# Org gating — restrict to members of this org
-AICRITIC_ORG=your-org-name
+# Restrict access to members of this org
+AICRITIC_ORG=your-org-slug
 
 # Audit log
 AICRITIC_AUDIT_LOG=/var/log/aicritic/audit.jsonl
 
-# Cache (optional — on-disk, per-server)
+# Cache (optional)
 AICRITIC_CACHE_TTL=86400
 AICRITIC_CACHE_DIR=/var/cache/aicritic
 ```
 
-The `GITHUB_TOKEN` should be a fine-grained PAT from a **service account**
-(a GitHub machine user), not a personal account, with:
-- Copilot Enterprise access
-- Contents: read (for PR branch creation)
-- Pull requests: write (for opening PRs)
+`GITHUB_TOKEN` should be a **fine-grained PAT from a service account** (not a personal account), with:
+- Contents: read
+- Pull requests: write
 
 ---
 
-## Step 3: Register the GitHub App
+## Step 3 — Register the GitHub App
 
-1. Log in as the service account (or org admin).
-2. Go to: **github.com → Settings → Developer settings → GitHub Apps → New GitHub App**
+1. Log in as the service account (or org admin)
+2. github.com → Settings → Developer settings → GitHub Apps → **New GitHub App**
 3. Fill in:
-   | Field | Value |
-   |-------|-------|
-   | GitHub App name | `aicritic` (or `your-org-aicritic`) |
-   | Homepage URL | `https://your-domain.example.com` |
-   | Webhook URL | `https://your-domain.example.com` |
-   | Copilot Agent | Enable |
-   | Callback URL | `https://your-domain.example.com` |
-4. Permissions:
-   - **Copilot Chat:** Read
-5. Click **Create GitHub App**
-6. Note the App ID.
+
+| Field | Value |
+|-------|-------|
+| Name | `aicritic` (or `your-org-aicritic`) |
+| Homepage URL | `https://your-domain.example.com` |
+| Webhook URL | `https://your-domain.example.com` |
+| Copilot Agent | Enable |
+| Callback URL | `https://your-domain.example.com` |
+
+4. Permissions: **Copilot Chat → Read**
+5. Click **Create GitHub App** and note the App ID
 
 ---
 
-## Step 4: Install the App on the org
+## Step 4 — Install on the org
 
-1. In the App settings: **Install App → Your org → Install**
-2. Choose: **All repositories** or select specific repos.
-3. Click **Install**.
+App settings → **Install App** → your org → **Install**.
 
-After installation, org members will see `@aicritic` in VS Code Copilot Chat
-within ~1 minute (may require VS Code reload).
+Choose all repositories or specific repos. After install, org members see `@aicritic`
+in VS Code within ~1 minute (may need a VS Code reload).
 
 ---
 
-## Step 5: Verify the deployment
+## Step 5 — Verify it's working
 
-Health check:
+Health check from your server:
 ```bash
 curl https://your-domain.example.com/
 # Expected: {"status": "ok", "service": "aicritic"}
@@ -163,35 +133,34 @@ curl https://your-domain.example.com/
 Test from VS Code:
 1. Open VS Code → Copilot Chat
 2. Type: `@aicritic check this code`
-3. Paste a code snippet and press Enter
-4. Verify a streaming analysis response appears
+3. Paste a snippet and press Enter
+4. Verify a streaming response appears
 
-Check the audit log:
+Watch the audit log:
 ```bash
 tail -f /var/log/aicritic/audit.jsonl
 ```
 
 ---
 
-## Org membership gating
+## I want to restrict access to org members only
 
-With `AICRITIC_ORG=your-org-name`, aicritic checks every request:
+Set `AICRITIC_ORG=your-org-slug` in your environment. On every request, aicritic:
 
-1. Calls `GET https://api.github.com/user` with the user's token → gets their login.
-2. Calls `GET https://api.github.com/orgs/{org}/members/{login}` → 204 = member.
-3. Returns HTTP 403 for non-members; logs a `denied` audit event.
+1. Calls `GET /user` with the user's token → gets their GitHub login
+2. Calls `GET /orgs/{org}/members/{login}` → 204 = member, anything else = denied
+3. Returns HTTP 403 for non-members and logs a `denied` audit event
 
-**Cache:** membership results are cached for 5 minutes per token prefix. Restart
-the server to force immediate re-verification (e.g., after removing a member).
+Membership results are cached for 5 minutes per token. To force immediate re-verification
+(e.g. after removing a contractor), restart the server.
 
-**Leave `AICRITIC_ORG` blank** to allow any valid Copilot user (not recommended
-for org deployments).
+Leave `AICRITIC_ORG` blank to allow any valid Copilot user — not recommended for org deployments.
 
 ---
 
-## Audit log reference
+## I want to review who's using aicritic and what they found
 
-Every request produces one JSON line:
+Every request writes one JSON line to the audit log:
 
 ```json
 {
@@ -217,64 +186,64 @@ Denied requests:
 }
 ```
 
-| Field | Description |
-|-------|-------------|
-| `ts` | ISO 8601 UTC timestamp |
-| `user` | GitHub login (empty if unknown) |
-| `tool` | Analysis profile used |
-| `files` | Number of files analysed |
-| `findings` | Total findings in final report |
-| `high_count` | Findings at HIGH or CRITICAL risk |
-| `agent_mode` | `true` if request used `@agent` trigger |
-| `duration_ms` | Wall-clock time for the full pipeline |
-| `verdict` | Final verdict string from Claude Opus |
-| `denied` | Present and `true` for blocked requests |
-| `reason` | Denial reason: `invalid_signature`, `not_org_member` |
-
-**Usage analytics from audit log:**
+**Useful queries:**
 ```bash
 # Most active users
 cat audit.jsonl | jq -r '.user' | sort | uniq -c | sort -rn | head 10
 
-# High/critical finding rate over time
-cat audit.jsonl | jq 'select(.high_count > 0) | .ts' | head 20
+# Sessions that found HIGH or CRITICAL issues
+cat audit.jsonl | jq 'select(.high_count > 0) | {user, ts, verdict}'
 
 # Average response time
 cat audit.jsonl | jq -r '.duration_ms' | awk '{s+=$1; c++} END {print s/c " ms avg"}'
 ```
 
----
-
-## Scaling
-
-The FastAPI server is stateless — scale horizontally by running multiple instances
-behind a load balancer. The pipeline result cache is per-instance (disk-based), so
-cache hits only occur on the same instance that last processed the request. For
-shared caching across instances, point `AICRITIC_CACHE_DIR` to a network file system.
+The log is compatible with Datadog, Splunk, CloudWatch, and `grep`.
 
 ---
 
-## Security checklist
+## I want to scale to multiple server instances
 
-- [ ] `AICRITIC_DEV_MODE=false` in production (never skip signature verification)
-- [ ] `AICRITIC_ORG` set to restrict access
-- [ ] `GITHUB_TOKEN` is a service account PAT, not a personal token
-- [ ] Server is behind TLS (HTTPS only, no plain HTTP)
-- [ ] Audit log path is on persistent storage
-- [ ] Audit log directory is not web-accessible
+The server is stateless — run multiple instances behind a load balancer.
+The pipeline result cache is per-instance (disk-based). For cache sharing across
+instances, point `AICRITIC_CACHE_DIR` to a network file system.
+
+---
+
+## Security checklist before going live
+
+- [ ] `AICRITIC_DEV_MODE=false` (never skip signature verification in production)
+- [ ] `AICRITIC_ORG` set to restrict access to your org
+- [ ] `GITHUB_TOKEN` is a service account PAT, not a personal account token
+- [ ] Server is behind HTTPS (no plain HTTP)
+- [ ] Audit log is on persistent storage and not web-accessible
 - [ ] Server process runs as a non-root user
-- [ ] Token is rotated on a schedule (recommended: 90 days)
+- [ ] Token rotation scheduled (recommended: every 90 days)
 
 ---
 
 ## Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `@aicritic` not visible to org members | App not installed on org | Install App on org (step 4) |
-| `403 Access restricted to org members` | User not in org | Add user to the GitHub org |
-| `401 Invalid request signature` | ECDSA check failing | Verify server is reachable; check for proxy stripping headers |
-| Model calls failing with 401 | User's token lacks Copilot access | User needs an active Copilot Enterprise seat |
-| Membership check always fails | Wrong `AICRITIC_ORG` value | Use the org's slug (not display name); check with `gh api /orgs/{slug}` |
-| Old removed employees still have access | Membership cache not expired | Restart server to clear cache (expires automatically in 5 min) |
-| Audit log not growing | Wrong path or permissions | Check `AICRITIC_AUDIT_LOG`; ensure directory exists and is writable |
+**`@aicritic` not visible to org members**
+The App isn't installed on the org. Go to App settings → Install App → your org.
+
+**`403 Access restricted to org members`**
+The user isn't in `AICRITIC_ORG`. Add them to the GitHub org, or temporarily
+clear `AICRITIC_ORG` to confirm it's a membership issue.
+
+**`401 Invalid request signature`**
+ECDSA verification is failing — usually a proxy stripping headers. Check that the
+`x-github-public-key-identifier` and `x-github-public-key-signature` headers
+reach the server unchanged.
+
+**Model calls returning 401**
+The user's token doesn't have Copilot Enterprise access. They need an active seat
+in the org's Copilot Enterprise licence.
+
+**Membership check passing for a removed employee**
+The 5-minute membership cache hasn't expired. Restart the server to force
+immediate re-verification.
+
+**`AICRITIC_ORG` set correctly but check always fails**
+Use the org's slug (the URL-safe name), not the display name.
+Confirm with: `curl -H "Authorization: token $GITHUB_TOKEN" https://api.github.com/orgs/your-slug`

@@ -1,29 +1,20 @@
-# Runbook — CI/CD Integration
+# CI/CD Setup
 
-## Overview
-
-`aicritic ci` runs the analysis pipeline and exits with a meaningful code:
-- **Exit 0** — no blocking findings, PR can merge
-- **Exit 1** — blocking findings exist, PR is blocked
-
-The gate integrates with GitHub Actions to post inline annotations on the PR diff
-and a step summary without any extra tooling.
+aicritic runs as a GitHub Actions gate that blocks PRs with high-risk findings
+and posts inline annotations directly on the diff — no extra tooling needed.
 
 ---
 
-## 5-minute setup
+## I want to add a CI gate to my repo
 
-### 1. Copy the workflow
-
-The workflow file is already in this repo at `.github/workflows/aicritic.yml`.
-Copy it into the target repository:
+**Step 1 — Copy the workflow**
 
 ```bash
 mkdir -p .github/workflows
 cp /path/to/aicritic/.github/workflows/aicritic.yml .github/workflows/
 ```
 
-Or create it from scratch:
+Or create it manually:
 
 ```yaml
 # .github/workflows/aicritic.yml
@@ -43,11 +34,10 @@ jobs:
   security-gate:
     name: security gate
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0        # required for --diff
+          fetch-depth: 0        # required for diff mode
 
       - uses: actions/setup-python@v5
         with:
@@ -57,173 +47,142 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run aicritic CI gate
+      - name: Run aicritic
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          AICRITIC_CACHE_TTL: "0"   # always fresh in CI
+          AICRITIC_CACHE_TTL: "0"
         run: python aicritic.py ci .
 ```
 
-### 2. Add GITHUB_TOKEN to secrets
+**Step 2 — Add GITHUB_TOKEN to secrets**
 
-Go to: **repo → Settings → Secrets and variables → Actions → New repository secret**
+Settings → Secrets and variables → Actions → New repository secret.
 
 Name: `GITHUB_TOKEN`
 Value: a fine-grained PAT with Copilot Enterprise access.
 
-*Note: the default `${{ secrets.GITHUB_TOKEN }}` works for read-only operations but
-may not have Copilot model access. Use a personal fine-grained PAT for model calls.*
+> The default `${{ secrets.GITHUB_TOKEN }}` works for repo operations but may
+> not have Copilot model access. Use a personal fine-grained PAT for model calls.
 
-### 3. Set as a required status check
+**Step 3 — Make it a required check**
 
-Go to: **repo → Settings → Branches → Branch protection rules → Edit (or Add rule)**
-
+Settings → Branches → Branch protection rules → Edit (or Add rule):
 - Enable **Require status checks to pass before merging**
-- Search for and add: `aicritic / security gate`
+- Add: `aicritic / security gate`
 - Enable **Require branches to be up to date before merging**
 
-Once saved, every PR to that branch must pass the aicritic gate before merging.
+That's it. Every PR to that branch is now gated.
 
 ---
 
-## Policy configuration
+## I want to control what blocks a PR
 
-Create `.aicritic-policy.yaml` at the repo root to customise blocking behaviour.
+Create `.aicritic-policy.yaml` at your repo root:
 
 ```yaml
 # .aicritic-policy.yaml
 
-# Risk levels that fail the CI gate and block the PR.
-# Remove "high" to only block on CRITICAL findings.
+# Risk levels that fail the gate and block the PR
 block_on: [critical, high]
 
-# Analysis profile to use.
+# Analysis profile
 tool: security_review
 
-# Minimum risk level to include in the report (does not affect blocking).
-min_risk: low
-
-# Only analyse files changed in this PR.
-# Set to false to scan the full codebase on every PR (slower).
+# Only scan files changed in this PR (faster, less noise)
 diff_only: true
 
-# Skip the Gemini cross-check for faster runs (~20s vs ~90s).
+# Skip Gemini cross-check for faster runs
 skip_checker: false
 ```
 
-If the file is absent, defaults are used: `block_on: [critical, high]`,
-`diff_only: true`, all other defaults.
+If the file is absent, defaults are used: `block_on: [critical, high]`, `diff_only: true`.
 
-**Recommended policy by team size:**
+**Recommended settings by team size:**
 
-| Team | Policy |
-|------|--------|
-| Small (< 5 devs) | `block_on: [critical, high]`, `skip_checker: false` |
-| Medium (5–20) | `block_on: [critical, high]`, `skip_checker: true` (faster) |
-| Large (20+) | `block_on: [critical]`, `skip_checker: true` (lowest friction) |
+| Team | Recommended policy |
+|------|--------------------|
+| < 5 devs | `block_on: [critical, high]`, `skip_checker: false` |
+| 5–20 devs | `block_on: [critical, high]`, `skip_checker: true` (faster) |
+| 20+ devs | `block_on: [critical]`, `skip_checker: true` (lowest friction) |
 
 ---
 
-## What developers see
+## I want to see what developers see
 
-### In the GitHub Actions tab
+**In the Actions tab:** a step called `security gate` shows ✅ PASSED or ❌ BLOCKED.
 
-A step named **security gate** shows either:
-- ✅ green — PASSED
-- ❌ red — BLOCKED with the specific findings
-
-### Inline PR annotations
-
-For every finding, the workflow emits a `::error` or `::warning` command:
+**On the Files Changed tab:** inline annotations pinned to exact lines:
 
 ```
-::error file=src/db.py,line=23,title=aicritic [HIGH]::Unsanitized user input...
-::warning file=src/auth.py,line=45,title=aicritic [MEDIUM]::Password in log output
+⛔ aicritic [HIGH] — Unsanitized user input passed to SQL query   db.py line 23
+⚠  aicritic [MEDIUM] — Password logged in plaintext              auth.py line 45
 ```
 
-These appear as **inline annotations on the Files Changed tab** of the PR —
-pinned to the exact line — without any additional tooling or configuration.
+**In the step summary:** a Markdown table of all findings, split into blocking and below-threshold:
 
-### Step summary
-
-The workflow writes a Markdown summary to `$GITHUB_STEP_SUMMARY`:
-
-```markdown
+```
 ## aicritic Security Gate — ❌ BLOCKED
 
 Files analysed: 8
-Blocking levels: `critical, high`
+Blocking levels: critical, high
 
 ### ❌ Blocking findings (1)
-
 | Risk | File | Lines | Description |
-|------|------|-------|-------------|
-| **HIGH** | `src/db.py` | 23-25 | Unsanitized user input passed to SQL query |
+| HIGH | src/db.py | 23-25 | Unsanitized user input passed to SQL query |
 
 ### ℹ️ Below-threshold findings (2)
-
 | Risk | File | Lines | Description |
-|------|------|-------|-------------|
-| MEDIUM | `src/auth.py` | 45 | Password logged in plaintext |
-| LOW    | `src/utils.py` | 12 | Unused import |
-
-### 🔕 Suppressed findings (1)
-
-| Risk | File | Lines | Reason |
-|------|------|-------|--------|
-| HIGH | `src/legacy.py` | 88 | reviewed by @lead — migration tracked in JIRA-456 |
+| MEDIUM | src/auth.py | 45 | Password logged in plaintext |
 ```
 
 ---
 
-## Suppressing findings
+## I want to suppress a finding the team has reviewed and accepted
 
-When a lead or senior developer reviews a finding and determines it is acceptable,
-they add a suppression comment in the source file:
-
-```python
-# aicritic: accepted-risk reviewed by @lead 2025-04-17 — internal endpoint, no user data
-cursor.execute(raw_query, params)
-```
-
-Or on the same line:
+Add a comment in the source file:
 
 ```python
-cursor.execute(raw_query, params)  # aicritic: accepted-risk ORM validates all inputs
+# aicritic: accepted-risk @alice 2025-04-17 — internal endpoint, no user data
+cursor.execute(raw_sql)
 ```
 
-**Effect in CI:**
-- The finding is removed from the blocking count and does not block the PR.
-- It appears in the step summary's 🔕 Suppressed table with the reason.
-- It remains in the full report for audit purposes.
-
-**Best practice:** include the reviewer's name and date in the reason. This creates
-a searchable audit trail:
-
+Or inline:
 ```python
-# aicritic: accepted-risk @alice 2025-04-17 — false positive, parameterized in ORM layer
+cursor.execute(raw_sql)  # aicritic: accepted-risk ORM validates all inputs
 ```
+
+**What happens:**
+- The finding no longer blocks the PR
+- It appears in the **🔕 Suppressed** table in the step summary so leads can audit it
+- It stays in the full JSON report for compliance
+
+**Best practice:** include reviewer name and date. This creates a searchable audit trail as the codebase grows.
 
 ---
 
-## Scanning the full codebase (not just diffs)
+## I want to run a full scan (not just changed files)
 
-Set `diff_only: false` in the policy, or pass `--no-diff`:
+```bash
+# In .aicritic-policy.yaml
+diff_only: false
+```
+
+Or pass `--no-diff` at the command line:
 
 ```bash
 python aicritic.py ci . --no-diff
 ```
 
 Useful for:
-- Scheduled nightly scans
-- Running after a new tool profile is added
-- Initial baseline creation
+- Nightly scans of the full codebase
+- Running after you add a new tool profile
+- Creating an initial baseline
 
-**Scheduled scan example:**
+**Scheduled nightly scan:**
 ```yaml
 on:
   schedule:
-    - cron: "0 2 * * 1"   # every Monday at 2am
+    - cron: "0 2 * * 1"   # every Monday at 2 AM
 
 jobs:
   full-scan:
@@ -236,39 +195,37 @@ jobs:
 
 ---
 
-## Multiple tool profiles in CI
-
-Run different profiles on different paths:
+## I want to run different scan profiles on different parts of the repo
 
 ```yaml
 jobs:
   secrets:
+    name: secrets scan
     steps:
       - run: python aicritic.py ci . --policy .aicritic-policy-secrets.yaml
 
   security:
+    name: security gate
     steps:
       - run: python aicritic.py ci src/ --policy .aicritic-policy-security.yaml
 ```
 
 ```yaml
 # .aicritic-policy-secrets.yaml
-block_on: [high, critical]
 tool: secrets_scan
-diff_only: false   # always scan entire codebase for secrets
+block_on: [high, critical]
+diff_only: false      # always scan the full codebase for secrets
 skip_checker: true
 ```
 
 ---
 
-## SARIF upload (optional)
-
-Upload findings to GitHub code scanning for persistent tracking:
+## I want findings in GitHub code scanning (persistent alerts)
 
 ```yaml
 - name: Run aicritic
   run: python aicritic.py check . --sarif aicritic.sarif --min-risk low
-  continue-on-error: true   # don't fail here — let the upload happen first
+  continue-on-error: true    # let the upload happen even if gate fails
 
 - name: Upload SARIF
   uses: github/codeql-action/upload-sarif@v3
@@ -276,35 +233,46 @@ Upload findings to GitHub code scanning for persistent tracking:
     sarif_file: aicritic.sarif
 ```
 
-This creates a permanent security alert in the **Security → Code scanning** tab,
-separate from the PR gate.
+Findings appear permanently in **Security → Code scanning**, separate from PR checks.
 
 ---
 
-## Local testing
-
-Test the CI gate locally before pushing:
+## I want to test the gate locally before pushing
 
 ```bash
-# Simulate GitHub Actions environment
+# Simulate the GitHub Actions environment
 GITHUB_BASE_REF=main python aicritic.py ci src/
 
-# Test with a specific policy file
+# Test with your policy file
 python aicritic.py ci src/ --policy .aicritic-policy.yaml
 
 # Test without diff filtering
 python aicritic.py ci src/ --no-diff
 ```
 
+Exit 0 = would pass. Exit 1 = would block.
+
 ---
 
 ## Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| Gate always passes | No `.aicritic-policy.yaml` found | Check file location — must be at repo root |
-| `No files to analyse` | `diff_only: true` but no changed files | Ensure `fetch-depth: 0` in checkout step |
-| `GITHUB_TOKEN is not set` | Secret not configured | Add to repo secrets (Settings → Secrets → Actions) |
-| Gate passes but annotations missing | Permissions issue | Add `pull-requests: write` to workflow permissions |
-| `401 Unauthorized` from model API | Token lacks Copilot access | Use a fine-grained PAT with Copilot Enterprise scope |
-| Slow CI runs | Full codebase scan | Set `diff_only: true` or `skip_checker: true` in policy |
+**Gate always passes even with obvious issues**
+Check that `.aicritic-policy.yaml` is at the repo root, not in a subdirectory.
+
+**`No files to analyse`**
+`diff_only: true` but the checkout has no diff. Make sure `fetch-depth: 0` is set in the
+`actions/checkout` step — without it, GitHub Actions checks out a shallow clone with no history.
+
+**Annotations not appearing on the PR diff**
+Add `pull-requests: write` to the workflow permissions block.
+
+**`GITHUB_TOKEN is not set`**
+The secret isn't configured. Go to Settings → Secrets → Actions and add it.
+
+**`401 Unauthorized` from model API**
+The default `${{ secrets.GITHUB_TOKEN }}` doesn't have Copilot model access.
+Use a fine-grained PAT (personal token, not the Actions bot token).
+
+**Gate is slow**
+Add `skip_checker: true` to your policy. This cuts ~70 seconds by skipping the Gemini stage.
+Also check `diff_only: true` is set — full scans on large codebases take much longer.
