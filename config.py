@@ -46,6 +46,8 @@ TOOLS = [
     # Infrastructure
     "dockerfile_review",
     "iac_review",
+    # Design
+    "design_review",
 ]
 
 
@@ -273,6 +275,22 @@ SYSTEM_PROMPTS = {
         "Review the provided Terraform, CloudFormation, Kubernetes YAML, or Pulumi "
         "files for misconfigurations, overly permissive access controls, missing "
         "encryption, exposed secrets, and reliability issues."
+    ),
+
+    # ------------------------------------------------------------------
+    # DESIGN — design pattern advisor
+    # ------------------------------------------------------------------
+
+    "analyst_design_review": _analyst_prompt(
+        "You are a software design analyst. "
+        "Review the provided source code for structural and design-level issues: "
+        "God classes, Feature Envy, Long Methods, Magic Numbers, Deep Nesting (>4 levels), "
+        "Primitive Obsession, and Shotgun Surgery. "
+        "Also identify opportunities to apply Strategy, Factory, Observer, Repository, "
+        "Decorator, or Command patterns where the code would clearly benefit. "
+        "Use the developer's exact class and method names in all findings. "
+        "Focus on issues that actively slow down the team or make code fragile — "
+        "not theoretical best-practice violations."
     ),
 
     # ------------------------------------------------------------------

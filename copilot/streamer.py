@@ -135,3 +135,53 @@ def format_explainer(result: dict):
             )
         if e.get("tip"):
             yield sse_chunk(f"> 💡 **Remember:** {e['tip']}\n\n")
+
+
+def format_pattern_advisor(result: dict):
+    anti = result.get("anti_patterns", [])
+    opps = result.get("pattern_opportunities", [])
+    metrics = result.get("metrics_summary", "")
+    summary = result.get("summary", "")
+    if not anti and not opps and not metrics:
+        return
+
+    yield sse_chunk("\n### Design Review\n\n")
+
+    if metrics:
+        yield sse_chunk(f"_{metrics}_\n\n")
+
+    if anti:
+        yield sse_chunk("**Anti-patterns detected:**\n\n")
+        for i, ap in enumerate(anti, 1):
+            sev = ap.get("severity", "low").upper()
+            yield sse_chunk(
+                f"---\n\n"
+                f"**{i}. {ap.get('name', '')}** `[{sev}]` — "
+                f"`{ap.get('file', '')}:{ap.get('line_range', '')}`\n\n"
+                f"{ap.get('description', '')}\n\n"
+            )
+            if ap.get("refactored_version"):
+                yield sse_chunk(
+                    f"✔ **Refactored:**\n```\n{ap['refactored_version'].strip()}\n```\n\n"
+                )
+
+    if opps:
+        yield sse_chunk("**Pattern opportunities:**\n\n")
+        for i, op in enumerate(opps, 1):
+            yield sse_chunk(
+                f"---\n\n"
+                f"**{i}. {op.get('pattern', '')} Pattern** — "
+                f"`{op.get('file', '')}:{op.get('line_range', '')}`\n\n"
+                f"{op.get('description', '')}\n\n"
+            )
+            if op.get("before"):
+                yield sse_chunk(
+                    f"✘ **Before:**\n```\n{op['before'].strip()}\n```\n\n"
+                )
+            if op.get("after"):
+                yield sse_chunk(
+                    f"✔ **After:**\n```\n{op['after'].strip()}\n```\n\n"
+                )
+
+    if summary:
+        yield sse_chunk(f"_{summary}_\n")

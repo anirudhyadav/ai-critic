@@ -173,6 +173,69 @@ def print_explainer(result: dict) -> None:
         console.print()
 
 
+def print_pattern_advisor(result: dict) -> None:
+    anti = result.get("anti_patterns", [])
+    opps = result.get("pattern_opportunities", [])
+    metrics = result.get("metrics_summary", "")
+    summary = result.get("summary", "")
+    error = result.get("_error")
+
+    console.print(
+        "\n[bold white on dark_green] DESIGN REVIEW [/bold white on dark_green]  "
+        "[bold]Anti-patterns & Pattern Opportunities[/bold]\n"
+    )
+
+    if error:
+        console.print(f"  [red]Pattern advisor error:[/red] {error}")
+        return
+
+    if metrics:
+        console.print(f"  [dim]Metrics: {metrics}[/dim]\n")
+
+    if anti:
+        console.print("[bold]Anti-patterns detected:[/bold]")
+        for i, ap in enumerate(anti, 1):
+            sev = ap.get("severity", "low")
+            c = _rc(sev)
+            console.print(
+                f"\n  [bold]{i}. {ap.get('name', '')}[/bold]  "
+                f"[{c}][{sev.upper()}][/{c}]  "
+                f"[dim]{ap.get('file', '')}:{ap.get('line_range', '')}[/dim]"
+            )
+            console.print(f"    {ap.get('description', '')}")
+            refactored = ap.get("refactored_version", "").strip()
+            if refactored:
+                console.print(f"\n    [green]→ Refactored:[/green]")
+                for line in refactored.splitlines():
+                    console.print(f"      [green]{line}[/green]")
+
+    if opps:
+        console.print("\n[bold]Pattern opportunities:[/bold]")
+        for i, op in enumerate(opps, 1):
+            console.print(
+                f"\n  [bold]{i}. {op.get('pattern', '')} Pattern[/bold]  "
+                f"[dim]{op.get('file', '')}:{op.get('line_range', '')}[/dim]"
+            )
+            console.print(f"    {op.get('description', '')}")
+            before = op.get("before", "").strip()
+            after  = op.get("after",  "").strip()
+            if before:
+                console.print(f"\n    [red]✘ Before:[/red]")
+                for line in before.splitlines():
+                    console.print(f"      [red]{line}[/red]")
+            if after:
+                console.print(f"\n    [green]✔ After:[/green]")
+                for line in after.splitlines():
+                    console.print(f"      [green]{line}[/green]")
+
+    if not anti and not opps:
+        console.print("  [dim]No design issues found.[/dim]")
+
+    if summary:
+        console.print(f"\n  [italic]{summary}[/italic]")
+    console.print()
+
+
 def print_footer(report_path: str) -> None:
     console.print()
     console.print("─" * 52)
@@ -242,6 +305,7 @@ def save_markdown(
     critic: dict,
     output_path: str = None,
     explainer: dict = None,
+    pattern_advisor: dict = None,
 ) -> str:
     if output_path is None:
         output_path = config.REPORT_FILE
@@ -383,6 +447,54 @@ def save_markdown(
             if e.get("tip"):
                 lines += [f"> 💡 **Remember:** {e['tip']}", ""]
 
+    if pattern_advisor:
+        anti = pattern_advisor.get("anti_patterns", [])
+        opps = pattern_advisor.get("pattern_opportunities", [])
+        metrics = pattern_advisor.get("metrics_summary", "")
+        pa_summary = pattern_advisor.get("summary", "")
+
+        lines += ["", "---", "", "## Design Review", ""]
+        if metrics:
+            lines += [f"_{metrics}_", ""]
+
+        if anti:
+            lines += ["### Anti-patterns", ""]
+            for ap in anti:
+                sev = ap.get("severity", "low").upper()
+                lines += [
+                    f"#### {ap.get('name','')} `[{sev}]`",
+                    f"**Location:** `{ap.get('file','')}` line {ap.get('line_range','')}",
+                    "",
+                    ap.get("description", ""),
+                    "",
+                ]
+                if ap.get("refactored_version"):
+                    lines += [
+                        "**Refactored:**",
+                        "```",
+                        ap["refactored_version"].strip(),
+                        "```",
+                        "",
+                    ]
+
+        if opps:
+            lines += ["### Pattern Opportunities", ""]
+            for op in opps:
+                lines += [
+                    f"#### {op.get('pattern','')} Pattern",
+                    f"**Location:** `{op.get('file','')}` line {op.get('line_range','')}",
+                    "",
+                    op.get("description", ""),
+                    "",
+                ]
+                if op.get("before"):
+                    lines += ["**Before:**", "```", op["before"].strip(), "```", ""]
+                if op.get("after"):
+                    lines += ["**After:**", "```", op["after"].strip(), "```", ""]
+
+        if pa_summary:
+            lines += [f"> {pa_summary}", ""]
+
     Path(output_path).write_text("\n".join(lines), encoding="utf-8")
     return output_path
 
@@ -398,6 +510,7 @@ def save_json(
     critic: dict,
     output_path: str,
     explainer: dict = None,
+    pattern_advisor: dict = None,
 ) -> str:
     """Write the full run results as a single JSON document."""
     payload = {
@@ -411,6 +524,8 @@ def save_json(
     }
     if explainer:
         payload["explanations"] = explainer.get("explanations", [])
+    if pattern_advisor:
+        payload["pattern_advisor"] = {k: v for k, v in pattern_advisor.items() if not k.startswith("_")}
     Path(output_path).write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return output_path
 
@@ -493,6 +608,72 @@ def _explain_html(explainer: dict | None) -> str:
     )
 
 
+def _pattern_advisor_html(result: dict | None) -> str:
+    if not result:
+        return ""
+    anti = result.get("anti_patterns", [])
+    opps = result.get("pattern_opportunities", [])
+    metrics = result.get("metrics_summary", "")
+    summary = result.get("summary", "")
+    if not anti and not opps and not metrics:
+        return ""
+
+    html = (
+        "<h2>Design Review</h2>"
+        "<style>"
+        ".pa-card{background:#f0fdf4;border-left:4px solid #22c55e;"
+        "padding:14px 18px;margin:16px 0;border-radius:0 6px 6px 0}"
+        ".pa-opp{background:#fefce8;border-left:4px solid #eab308;"
+        "padding:14px 18px;margin:16px 0;border-radius:0 6px 6px 0}"
+        "pre.before{background:#fdecea;padding:10px;border-radius:4px;overflow-x:auto}"
+        "pre.after{background:#eafaf1;padding:10px;border-radius:4px;overflow-x:auto}"
+        "</style>"
+    )
+    if metrics:
+        html += f'<p><em>{metrics}</em></p>'
+
+    if anti:
+        html += "<h3>Anti-patterns</h3>"
+        for ap in anti:
+            sev = ap.get("severity", "low")
+            desc = ap.get("description", "").replace("<", "&lt;").replace(">", "&gt;")
+            ref = ap.get("refactored_version", "").strip().replace("<", "&lt;").replace(">", "&gt;")
+            html += (
+                f'<div class="pa-card">'
+                f'<h4>{ap.get("name","")} {_badge(sev)} '
+                f'<span style="font-weight:normal;font-size:.85em">'
+                f'<code>{ap.get("file","")}</code> line {ap.get("line_range","")}</span></h4>'
+                f'<p>{desc}</p>'
+            )
+            if ref:
+                html += f'<p><strong>Refactored:</strong><pre class="after">{ref}</pre></p>'
+            html += "</div>"
+
+    if opps:
+        html += "<h3>Pattern Opportunities</h3>"
+        for op in opps:
+            desc = op.get("description", "").replace("<", "&lt;").replace(">", "&gt;")
+            before = op.get("before", "").strip().replace("<", "&lt;").replace(">", "&gt;")
+            after  = op.get("after",  "").strip().replace("<", "&lt;").replace(">", "&gt;")
+            html += (
+                f'<div class="pa-opp">'
+                f'<h4>{op.get("pattern","")} Pattern '
+                f'<span style="font-weight:normal;font-size:.85em">'
+                f'<code>{op.get("file","")}</code> line {op.get("line_range","")}</span></h4>'
+                f'<p>{desc}</p>'
+            )
+            if before:
+                html += f'<p><strong>Before:</strong><pre class="before">{before}</pre></p>'
+            if after:
+                html += f'<p><strong>After:</strong><pre class="after">{after}</pre></p>'
+            html += "</div>"
+
+    if summary:
+        html += f'<div class="summary">{summary}</div>'
+
+    return html
+
+
 def save_html(
     target: str,
     analyst: dict,
@@ -500,6 +681,7 @@ def save_html(
     critic: dict,
     output_path: str,
     explainer: dict = None,
+    pattern_advisor: dict = None,
 ) -> str:
     """Write a self-contained HTML report with inline CSS."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -565,6 +747,7 @@ def save_html(
 <h2>Recommendations</h2>
 {recs_html}
 {_explain_html(explainer)}
+{_pattern_advisor_html(pattern_advisor)}
 </body>
 </html>"""
 

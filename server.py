@@ -24,6 +24,7 @@ from copilot.audit import log_request, log_denied
 from copilot.parser import parse_request
 from copilot.streamer import (
     format_analyst, format_checker, format_critic, format_explainer,
+    format_pattern_advisor,
     sse_chunk, sse_done, sse_start,
 )
 from report.formatter import filter_by_risk
@@ -157,6 +158,21 @@ async def _pipeline_stream(parsed: dict, user_token: str = "", username: str = "
             run_explainer, inputs, critic_filtered, user_token
         )
         for chunk in format_explainer(explainer_result):
+            yield chunk
+
+    # design_review: run pattern advisor with static complexity metrics
+    if tool == "design_review":
+        yield sse_chunk("\n_Running Pattern Advisor…_\n\n")
+        from inputs.complexity import analyse_complexity, complexity_summary
+        from pipeline.pattern_advisor import run_pattern_advisor
+        import patterns_config as _pcfg
+        pconfig = _pcfg.load(".")
+        complexity_report = await asyncio.to_thread(analyse_complexity, inputs)
+        complexity_text = complexity_summary(complexity_report, pconfig)
+        pa_result = await asyncio.to_thread(
+            run_pattern_advisor, inputs, complexity_text, pconfig, user_token
+        )
+        for chunk in format_pattern_advisor(pa_result):
             yield chunk
 
     yield sse_chunk("\n\n---\n_Analysis complete._\n")

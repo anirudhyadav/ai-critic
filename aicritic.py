@@ -600,6 +600,19 @@ def main() -> None:
     tool_label = args.tool or (os.path.basename(args.roles) if args.roles else "security_review")
     console.print(f"[dim]Tool: {tool_label} — {len(inputs['files'])} file(s)[/dim]\n")
 
+    # design_review: always run explain + pre-compute complexity metrics
+    is_design_review = (tool_label == "design_review")
+    if is_design_review:
+        args.explain = True
+        from inputs.complexity import analyse_complexity, complexity_summary
+        import patterns_config as _pcfg
+        _complexity_report = analyse_complexity(inputs)
+        _patterns_cfg = _pcfg.load(args.target)
+        _complexity_text = complexity_summary(_complexity_report, _patterns_cfg)
+    else:
+        _complexity_text = ""
+        _patterns_cfg = None
+
     # --parallel + --skip-checker is contradictory — parallel implies running the checker
     if args.parallel and args.skip_checker:
         console.print(
@@ -718,6 +731,19 @@ def main() -> None:
         explainer_result = run_explainer(inputs, critic_display)
         print_explainer(explainer_result)
 
+    # design_review: pattern advisor runs after critic (with or without findings)
+    pattern_advisor_result = None
+    if is_design_review:
+        from pipeline.pattern_advisor import run_pattern_advisor
+        from report.formatter import print_pattern_advisor
+        console.print("\n[dim]  Running Pattern Advisor…[/dim]")
+        pattern_advisor_result = run_pattern_advisor(
+            inputs,
+            complexity_text=_complexity_text,
+            patterns_config=_patterns_cfg,
+        )
+        print_pattern_advisor(pattern_advisor_result)
+
     # Save report
     report_path = save_markdown(
         args.target,
@@ -726,6 +752,7 @@ def main() -> None:
         critic_display,
         args.output,
         explainer=explainer_result,
+        pattern_advisor=pattern_advisor_result,
     )
     print_footer(report_path)
 
@@ -743,12 +770,12 @@ def main() -> None:
 
     # Optional: JSON report
     if args.json_output:
-        jpath = save_json(args.target, analyst_filtered, checker_filtered, critic_display, args.json_output, explainer=explainer_result)
+        jpath = save_json(args.target, analyst_filtered, checker_filtered, critic_display, args.json_output, explainer=explainer_result, pattern_advisor=pattern_advisor_result)
         console.print(f"[bold green]JSON saved:[/bold green] {jpath}\n")
 
     # Optional: HTML report
     if args.html_output:
-        hpath = save_html(args.target, analyst_filtered, checker_filtered, critic_display, args.html_output, explainer=explainer_result)
+        hpath = save_html(args.target, analyst_filtered, checker_filtered, critic_display, args.html_output, explainer=explainer_result, pattern_advisor=pattern_advisor_result)
         console.print(f"[bold green]HTML saved:[/bold green] {hpath}\n")
 
     # Optional: Slack/Teams notifications

@@ -75,7 +75,7 @@ TOOL_SCHEMAS = [
                             "Analysis tool profile: security_review, secrets_scan, "
                             "error_handling, performance, pr_review, test_quality, "
                             "migration_safety, code_coverage, dependency_audit, "
-                            "dockerfile_review, iac_review"
+                            "dockerfile_review, iac_review, design_review"
                         ),
                     },
                     "skip_checker": {
@@ -183,6 +183,30 @@ TOOL_SCHEMAS = [
                     },
                 },
                 "required": ["command"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "refactor",
+            "description": (
+                "Run the design pattern advisor on the loaded files. Detects anti-patterns "
+                "(God Class, Feature Envy, Long Method, Magic Numbers, Deep Nesting, "
+                "Primitive Obsession, Shotgun Surgery) and suggests Strategy, Factory, "
+                "Observer, Repository, Decorator, or Command patterns with before/after "
+                "using the developer's exact names. Includes cyclomatic complexity metrics. "
+                "Must call read_files or get_changed_files first."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "patterns_file": {
+                        "type": "string",
+                        "description": "Path to .aicritic-patterns.yaml team conventions file (default: auto-discover)",
+                    }
+                },
+                "required": [],
             },
         },
     },
@@ -391,6 +415,67 @@ def _handle_run_shell(args: dict, session: AgentSession) -> str:
         return f"Shell error: {e}"
 
 
+def _handle_refactor(args: dict, session: AgentSession) -> str:
+    if not session.inputs:
+        return "Error: no files loaded — call read_files or get_changed_files first."
+
+    patterns_file = args.get("patterns_file")
+
+    import patterns_config as _pcfg
+    from inputs.complexity import analyse_complexity, complexity_summary
+    from pipeline.pattern_advisor import run_pattern_advisor
+
+    # Load team conventions
+    start = patterns_file or session.target or "."
+    pconfig = _pcfg.load(start)
+
+    # Compute static metrics
+    complexity_report = analyse_complexity(session.inputs)
+    complexity_text = complexity_summary(complexity_report, pconfig)
+
+    try:
+        result = run_pattern_advisor(
+            session.inputs,
+            complexity_text=complexity_text,
+            patterns_config=pconfig,
+            token=session.token,
+        )
+    except Exception as e:
+        return f"Pattern advisor error: {e}"
+
+    session.log("refactor: pattern advisor complete")
+
+    anti = result.get("anti_patterns", [])
+    opps = result.get("pattern_opportunities", [])
+    summary = result.get("summary", "")
+    metrics = result.get("metrics_summary", "")
+
+    lines = []
+    if anti:
+        lines.append(f"Anti-patterns ({len(anti)}):")
+        for ap in anti:
+            lines.append(
+                f"  [{ap.get('severity','?').upper()}] {ap.get('name','')} "
+                f"— {ap.get('file','')}:{ap.get('line_range','')} "
+                f"— {ap.get('description','')}"
+            )
+    if opps:
+        lines.append(f"\nPattern opportunities ({len(opps)}):")
+        for op in opps:
+            lines.append(
+                f"  {op.get('pattern','')} — {op.get('file','')}:{op.get('line_range','')} "
+                f"— {op.get('description','')}"
+            )
+    if metrics:
+        lines.append(f"\nMetrics: {metrics}")
+    if summary:
+        lines.append(f"\n{summary}")
+    if not lines:
+        lines.append("No design issues found.")
+
+    return "\n".join(lines)
+
+
 def _handle_save_baseline(args: dict, session: AgentSession) -> str:
     if not session.critic_result:
         return "Error: no analysis results — call run_analysis first."
@@ -417,6 +502,7 @@ _HANDLERS = {
     "read_file":         _handle_read_file,
     "write_file":        _handle_write_file,
     "run_shell":         _handle_run_shell,
+    "refactor":          _handle_refactor,
     "save_baseline":     _handle_save_baseline,
 }
 
