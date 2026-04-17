@@ -127,6 +127,15 @@ python aicritic.py check ./src --parallel
 Trades the analyst→checker review chain for wall-clock speed.
 Total time ≈ max(Sonnet, Gemini) + Opus instead of all three sequential.
 
+### Large codebases — automatic batching
+
+When the source set is too large for a single LLM call, `aicritic` splits it
+into batches automatically — you'll see `[batch 1/3]…` in the output. The
+analyst and checker run per batch; findings are aggregated before the
+critic runs once. Works transparently with `--parallel`.
+
+No flag needed — batching kicks in above ~40 kB of source code.
+
 ### CI integration — emit SARIF for GitHub code-scanning
 
 ```bash

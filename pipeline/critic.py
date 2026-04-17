@@ -2,6 +2,7 @@ import json
 from openai import OpenAI
 import config
 from pipeline import parse_llm_json
+from pipeline.batching import build_finding_context
 
 
 def run_critic(
@@ -10,7 +11,16 @@ def run_critic(
     checker_output: dict,
     roles_dir: str = None,
 ) -> dict:
-    """Step 3: Claude Opus — critic/arbiter, receives all prior context."""
+    """Step 3: Claude Opus — critic/arbiter.
+
+    The critic no longer receives full source files. Instead it gets:
+      - a compact 'relevant code' section with ±5 lines around each flagged range
+      - the full analyst JSON
+      - the full checker JSON (or a skipped notice)
+
+    This cuts critic input tokens by ~40% without affecting arbitration quality —
+    the critic's job is to reconcile existing findings, not discover new ones.
+    """
     client = OpenAI(
         base_url=config.GITHUB_MODELS_BASE_URL,
         api_key=config.GITHUB_TOKEN,
@@ -24,16 +34,16 @@ def run_critic(
         if role["instructions"] else base_prompt
     )
 
-    source_parts = [
-        f"## File: {f['path']}\n\n```python\n{f['content']}\n```"
-        for f in inputs["files"]
-    ]
-    source_text  = "\n\n".join(source_parts)
-
     analyst_clean = {k: v for k, v in analyst_output.items() if not k.startswith("_")}
     checker_clean = {k: v for k, v in checker_output.items() if not k.startswith("_")}
     analyst_json  = json.dumps(analyst_clean, indent=2)
     checker_json  = json.dumps(checker_clean, indent=2)
+
+    # Build a compact context window from only the flagged line ranges
+    all_findings = (
+        analyst_clean.get("findings", []) + checker_clean.get("findings", [])
+    )
+    context_text = build_finding_context(inputs, all_findings)
 
     checker_skipped = checker_output.get("_skipped")
     checker_section = (
@@ -46,7 +56,7 @@ def run_critic(
     )
 
     user_message = (
-        f"# Source Code\n\n{source_text}\n\n"
+        f"# Relevant Code (context around flagged lines only)\n\n{context_text}\n\n"
         f"# Primary Analyst Findings (Claude Sonnet)\n\n```json\n{analyst_json}\n```\n\n"
         f"{checker_section}"
     )

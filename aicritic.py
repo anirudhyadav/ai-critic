@@ -163,6 +163,7 @@ def main() -> None:
     from pipeline.checker import run_checker, skipped_result as checker_skipped
     from pipeline.critic  import run_critic
     from pipeline.fixer   import run_fixer
+    from pipeline.batching import split_into_batches, merge_stage_results
     from report.formatter import (
         console,
         print_header, print_analyst, print_checker,
@@ -188,40 +189,56 @@ def main() -> None:
             "[yellow]Note:[/yellow] --skip-checker overrides --parallel; running Sonnet only."
         )
 
-    if args.parallel and not args.skip_checker:
-        # Steps 1 & 2 in parallel — Sonnet and Gemini analyse independently
-        from concurrent.futures import ThreadPoolExecutor
-        console.print("[dim]  Running Claude Sonnet + Gemini in parallel…[/dim]")
-        try:
-            with ThreadPoolExecutor(max_workers=2) as ex:
-                analyst_future = ex.submit(run_analyst, inputs, roles_dir)
-                checker_future = ex.submit(
-                    run_checker, inputs, None, roles_dir, True   # independent=True
-                )
-                analyst_result = analyst_future.result()
-                checker_result = checker_future.result()
-        except Exception as e:
-            console.print(f"[red]Analyst error:[/red] {e}")
-            sys.exit(1)
-        print_analyst(analyst_result)
-        print_checker(checker_result)
-    else:
-        # Sequential: Sonnet → Gemini
-        console.print("[dim]  Running Claude Sonnet…[/dim]")
-        try:
-            analyst_result = run_analyst(inputs, roles_dir)
-        except Exception as e:
-            console.print(f"[red]Sonnet error:[/red] {e}")
-            sys.exit(1)
-        print_analyst(analyst_result)
+    # Auto-batch large codebases to stay within context window per LLM call
+    batches = split_into_batches(inputs)
+    if len(batches) > 1:
+        console.print(
+            f"[dim]  Codebase too large for a single call — splitting into "
+            f"{len(batches)} batches[/dim]"
+        )
 
-        if args.skip_checker:
-            console.print("\n[dim]  Skipping Gemini (--skip-checker)…[/dim]")
-            checker_result = checker_skipped("disabled via --skip-checker")
+    analyst_results: list = []
+    checker_results: list = []
+
+    for i, batch in enumerate(batches, 1):
+        prefix = f"[dim]  [batch {i}/{len(batches)}][/dim] " if len(batches) > 1 else "[dim]  [/dim]"
+
+        if args.parallel and not args.skip_checker:
+            from concurrent.futures import ThreadPoolExecutor
+            console.print(f"{prefix}Running Sonnet + Gemini in parallel…")
+            try:
+                with ThreadPoolExecutor(max_workers=2) as ex:
+                    analyst_future = ex.submit(run_analyst, batch, roles_dir)
+                    checker_future = ex.submit(
+                        run_checker, batch, None, roles_dir, True   # independent=True
+                    )
+                    a_res = analyst_future.result()
+                    c_res = checker_future.result()
+            except Exception as e:
+                console.print(f"[red]Analyst error:[/red] {e}")
+                sys.exit(1)
         else:
-            console.print("\n[dim]  Running Gemini…[/dim]")
-            checker_result = run_checker(inputs, analyst_result, roles_dir)
-        print_checker(checker_result)
+            console.print(f"{prefix}Running Claude Sonnet…")
+            try:
+                a_res = run_analyst(batch, roles_dir)
+            except Exception as e:
+                console.print(f"[red]Sonnet error:[/red] {e}")
+                sys.exit(1)
+
+            if args.skip_checker:
+                c_res = checker_skipped("disabled via --skip-checker")
+            else:
+                console.print(f"{prefix}Running Gemini…")
+                c_res = run_checker(batch, a_res, roles_dir)
+
+        analyst_results.append(a_res)
+        checker_results.append(c_res)
+
+    analyst_result = merge_stage_results(analyst_results)
+    checker_result = merge_stage_results(checker_results)
+
+    print_analyst(analyst_result)
+    print_checker(checker_result)
 
     # Step 3 — Opus
     console.print("\n[dim]  Running Claude Opus…[/dim]")
