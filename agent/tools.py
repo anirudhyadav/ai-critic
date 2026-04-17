@@ -62,9 +62,9 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "run_analysis",
             "description": (
-                "Run the three-model critic chain (Sonnet → Gemini → Opus) on the "
-                "loaded files. Returns a findings summary. Must call read_files or "
-                "get_changed_files first."
+                "Shortcut: run all three stages (Sonnet → Gemini → Opus) in one call. "
+                "Use this for quick full scans when you don't need to inspect intermediate "
+                "results. For intelligent composition use analyse()/cross_check()/critique()."
             ),
             "parameters": {
                 "type": "object",
@@ -85,6 +85,57 @@ TOOL_SCHEMAS = [
                 },
                 "required": [],
             },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "analyse",
+            "description": (
+                "Stage 1: run Claude Sonnet (primary analyst) on loaded files. "
+                "Returns raw findings. Use instead of run_analysis when you want to "
+                "inspect results before deciding whether to call cross_check(). "
+                "Must call read_files or get_changed_files first."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tool": {
+                        "type": "string",
+                        "description": (
+                            "Analysis tool profile: security_review, secrets_scan, "
+                            "error_handling, performance, pr_review, test_quality, "
+                            "migration_safety, code_coverage, dependency_audit, "
+                            "dockerfile_review, iac_review, design_review"
+                        ),
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "cross_check",
+            "description": (
+                "Stage 2: run Gemini to verify the analyst's findings. "
+                "Only call if analyse() returned HIGH or CRITICAL findings worth verifying. "
+                "Skip for LOW/MEDIUM-only results — saves ~60s. Requires analyse() first."
+            ),
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "critique",
+            "description": (
+                "Stage 3: run Claude Opus to produce a final verdict and prioritised "
+                "recommendations. Call after analyse() — and after cross_check() if you ran it. "
+                "Requires analyse() first."
+            ),
+            "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
     {
@@ -272,6 +323,92 @@ def _handle_read_files(args: dict, session: AgentSession) -> str:
         return f"Loaded {n} file(s) from {session.target}"
     except Exception as e:
         return f"Error loading files: {e}"
+
+
+def _resolve_roles_dir(tool: str, session: AgentSession) -> str | None:
+    if session.roles_dir:
+        return session.roles_dir
+    if tool and tool != "security_review":
+        import config as _cfg
+        candidate = os.path.join(_cfg.TOOLS_DIR, tool)
+        if os.path.isdir(candidate):
+            return candidate
+    return None
+
+
+def _handle_analyse(args: dict, session: AgentSession) -> str:
+    if not session.inputs:
+        return "Error: no files loaded — call read_files or get_changed_files first."
+    tool = args.get("tool") or session.tool_label or "security_review"
+    from pipeline.analyst import run_analyst
+    from pipeline.batching import split_into_batches, merge_stage_results
+    roles_dir = _resolve_roles_dir(tool, session)
+    try:
+        batches = split_into_batches(session.inputs)
+        results = [run_analyst(b, roles_dir, token=session.token) for b in batches]
+        session.analyst_result = merge_stage_results(results)
+        # Reset downstream so stale results don't linger
+        session.checker_result = None
+        session.critic_result = None
+    except Exception as e:
+        return f"Analyst error: {e}"
+
+    findings = session.analyst_result.get("findings", [])
+    high = [f for f in findings if f.get("risk") in ("high", "critical")]
+    lines = [f"Sonnet found {len(findings)} finding(s) across {len(batches)} batch(es)."]
+    for f in findings:
+        lines.append(f"  [{f.get('risk','?').upper()}] {f.get('file','')}:{f.get('line_range','')} — {f.get('description','')}")
+    if high:
+        lines.append(f"\n{len(high)} HIGH/CRITICAL finding(s) detected — consider calling cross_check() to verify.")
+    else:
+        lines.append("\nNo HIGH/CRITICAL findings — you can skip cross_check() and call critique() directly.")
+    session.log(f"analyse({tool}): {len(findings)} finding(s)")
+    return "\n".join(lines)
+
+
+def _handle_cross_check(args: dict, session: AgentSession) -> str:
+    if not session.analyst_result:
+        return "Error: no analyst results — call analyse() first."
+    if not session.inputs:
+        return "Error: no files loaded."
+    from pipeline.checker import run_checker
+    from pipeline.batching import split_into_batches, merge_stage_results
+    roles_dir = _resolve_roles_dir(session.tool_label or "security_review", session)
+    try:
+        batches = split_into_batches(session.inputs)
+        results = [run_checker(b, session.analyst_result, roles_dir, token=session.token) for b in batches]
+        session.checker_result = merge_stage_results(results)
+        session.critic_result = None
+    except Exception as e:
+        return f"Cross-check error: {e}"
+
+    agreed = len(session.checker_result.get("agreements", []))
+    disagreed = len(session.checker_result.get("disagreements", []))
+    extra = len(session.checker_result.get("findings", []))
+    session.log(f"cross_check: {agreed} confirmed, {disagreed} disputed, {extra} new")
+    return (
+        f"Gemini cross-check complete: {agreed} agreement(s), {disagreed} disagreement(s), "
+        f"{extra} additional finding(s). Call critique() for the final verdict."
+    )
+
+
+def _handle_critique(args: dict, session: AgentSession) -> str:
+    if not session.analyst_result:
+        return "Error: no analyst results — call analyse() first."
+    if not session.inputs:
+        return "Error: no files loaded."
+    from pipeline.checker import skipped_result as checker_skipped
+    from pipeline.critic import run_critic
+    roles_dir = _resolve_roles_dir(session.tool_label or "security_review", session)
+    checker = session.checker_result or checker_skipped("cross_check not run")
+    try:
+        session.critic_result = run_critic(
+            session.inputs, session.analyst_result, checker, roles_dir, token=session.token
+        )
+    except Exception as e:
+        return f"Critic error: {e}"
+    session.log("critique: final verdict produced")
+    return session.findings_summary()
 
 
 def _handle_run_analysis(args: dict, session: AgentSession) -> str:
@@ -497,6 +634,9 @@ _HANDLERS = {
     "get_changed_files": _handle_get_changed_files,
     "read_files":        _handle_read_files,
     "run_analysis":      _handle_run_analysis,
+    "analyse":           _handle_analyse,
+    "cross_check":       _handle_cross_check,
+    "critique":          _handle_critique,
     "apply_fixes":       _handle_apply_fixes,
     "open_pr":           _handle_open_pr,
     "read_file":         _handle_read_file,

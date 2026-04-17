@@ -445,7 +445,13 @@ def main() -> None:
         "--skip-checker",
         action="store_true",
         default=False,
-        help="Skip the Gemini cross-check stage — Sonnet → Opus only (faster, less reliable)",
+        help="Always skip Gemini — Sonnet → Opus only (fastest)",
+    )
+    check_cmd.add_argument(
+        "--full",
+        action="store_true",
+        default=False,
+        help="Always run Gemini even when no HIGH findings (disables adaptive skip)",
     )
     check_cmd.add_argument(
         "--parallel",
@@ -703,8 +709,22 @@ def main() -> None:
             if args.skip_checker:
                 c_res = checker_skipped("disabled via --skip-checker")
             else:
-                console.print(f"{prefix}Running Gemini…")
-                c_res = run_checker(batch, a_res, roles_dir)
+                # Adaptive skip: Gemini adds the most value when HIGH/CRITICAL
+                # findings need independent verification. For LOW/MEDIUM-only
+                # results it rarely changes the verdict and costs ~60s.
+                _high_found = any(
+                    config.RISK_ORDER.get(f.get("risk", "low"), 0) >= config.RISK_ORDER["high"]
+                    for f in a_res.get("findings", [])
+                )
+                if _high_found or getattr(args, "full", False):
+                    console.print(f"{prefix}Running Gemini…")
+                    c_res = run_checker(batch, a_res, roles_dir)
+                else:
+                    c_res = checker_skipped("no HIGH/CRITICAL findings — skipped for speed")
+                    console.print(
+                        f"{prefix}[dim]Gemini skipped — no HIGH or CRITICAL findings "
+                        f"(add --full to always run it)[/dim]"
+                    )
 
         analyst_results.append(a_res)
         checker_results.append(c_res)
