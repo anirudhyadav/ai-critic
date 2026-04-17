@@ -91,10 +91,12 @@ python aicritic.py check <target> [options]
 | `--coverage FILE` | `coverage.xml` from `coverage run -m pytest && coverage xml` |
 | `--min-risk LEVEL` | Only surface findings at `low`, `medium`, or `high` and above |
 | `--skip-checker` | Skip the Gemini stage — Sonnet → Opus only (faster; less reliable) |
+| `--parallel` | Run Sonnet + Gemini in parallel (independent analyses) |
 | `--fix` | Run the fixer stage — apply recommendations to source files |
 | `--dry-run` | With `--fix`: show the diff but do not write any files |
 | `--roles DIR` | Use a custom roles directory instead of a built-in tool |
 | `--output FILE` | Report output path (default: `aicritic_report.md`) |
+| `--sarif FILE` | Also write SARIF 2.1.0 JSON for GitHub code-scanning upload |
 
 ---
 

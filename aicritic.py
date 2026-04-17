@@ -95,6 +95,18 @@ def main() -> None:
         help="Skip the Gemini cross-check stage — Sonnet → Opus only (faster, less reliable)",
     )
     check_cmd.add_argument(
+        "--parallel",
+        action="store_true",
+        default=False,
+        help="Run Sonnet and Gemini in parallel (independent analyses) — faster than sequential",
+    )
+    check_cmd.add_argument(
+        "--sarif",
+        metavar="FILE",
+        default=None,
+        help="Write findings as SARIF 2.1.0 JSON for GitHub code-scanning upload",
+    )
+    check_cmd.add_argument(
         "--fix",
         action="store_true",
         default=False,
@@ -170,23 +182,46 @@ def main() -> None:
     tool_label = args.tool or (os.path.basename(args.roles) if args.roles else "security_review")
     console.print(f"[dim]Tool: {tool_label} — {len(inputs['files'])} file(s)[/dim]\n")
 
-    # Step 1 — Sonnet
-    console.print("[dim]  Running Claude Sonnet…[/dim]")
-    try:
-        analyst_result = run_analyst(inputs, roles_dir)
-    except Exception as e:
-        console.print(f"[red]Sonnet error:[/red] {e}")
-        sys.exit(1)
-    print_analyst(analyst_result)
+    # --parallel + --skip-checker is contradictory — parallel implies running the checker
+    if args.parallel and args.skip_checker:
+        console.print(
+            "[yellow]Note:[/yellow] --skip-checker overrides --parallel; running Sonnet only."
+        )
 
-    # Step 2 — Gemini (or skipped via --skip-checker)
-    if args.skip_checker:
-        console.print("\n[dim]  Skipping Gemini (--skip-checker)…[/dim]")
-        checker_result = checker_skipped("disabled via --skip-checker")
+    if args.parallel and not args.skip_checker:
+        # Steps 1 & 2 in parallel — Sonnet and Gemini analyse independently
+        from concurrent.futures import ThreadPoolExecutor
+        console.print("[dim]  Running Claude Sonnet + Gemini in parallel…[/dim]")
+        try:
+            with ThreadPoolExecutor(max_workers=2) as ex:
+                analyst_future = ex.submit(run_analyst, inputs, roles_dir)
+                checker_future = ex.submit(
+                    run_checker, inputs, None, roles_dir, True   # independent=True
+                )
+                analyst_result = analyst_future.result()
+                checker_result = checker_future.result()
+        except Exception as e:
+            console.print(f"[red]Analyst error:[/red] {e}")
+            sys.exit(1)
+        print_analyst(analyst_result)
+        print_checker(checker_result)
     else:
-        console.print("\n[dim]  Running Gemini…[/dim]")
-        checker_result = run_checker(inputs, analyst_result, roles_dir)
-    print_checker(checker_result)
+        # Sequential: Sonnet → Gemini
+        console.print("[dim]  Running Claude Sonnet…[/dim]")
+        try:
+            analyst_result = run_analyst(inputs, roles_dir)
+        except Exception as e:
+            console.print(f"[red]Sonnet error:[/red] {e}")
+            sys.exit(1)
+        print_analyst(analyst_result)
+
+        if args.skip_checker:
+            console.print("\n[dim]  Skipping Gemini (--skip-checker)…[/dim]")
+            checker_result = checker_skipped("disabled via --skip-checker")
+        else:
+            console.print("\n[dim]  Running Gemini…[/dim]")
+            checker_result = run_checker(inputs, analyst_result, roles_dir)
+        print_checker(checker_result)
 
     # Step 3 — Opus
     console.print("\n[dim]  Running Claude Opus…[/dim]")
@@ -222,6 +257,12 @@ def main() -> None:
         args.output,
     )
     print_footer(report_path)
+
+    # Optional: SARIF for GitHub code-scanning upload
+    if args.sarif:
+        from report.sarif import save_sarif
+        sarif_path = save_sarif(critic_filtered, args.target, tool_label, args.sarif)
+        console.print(f"[bold green]SARIF saved:[/bold green] {sarif_path}\n")
 
     # Step 4 (optional) — Fixer
     if not args.fix:

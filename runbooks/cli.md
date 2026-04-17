@@ -117,6 +117,33 @@ python aicritic.py check ./src --skip-checker
 Use this for tight dev-loop iterations or when Gemini is rate-limited.
 The critic is told the cross-check was skipped and applies extra scrutiny.
 
+### Parallel mode — Sonnet and Gemini at the same time
+
+```bash
+# Both analysts run in parallel; Opus arbitrates between independent findings
+python aicritic.py check ./src --parallel
+```
+
+Trades the analyst→checker review chain for wall-clock speed.
+Total time ≈ max(Sonnet, Gemini) + Opus instead of all three sequential.
+
+### CI integration — emit SARIF for GitHub code-scanning
+
+```bash
+python aicritic.py check ./src --sarif aicritic.sarif
+```
+
+In a GitHub Actions workflow:
+```yaml
+- run: python aicritic.py check ./src --sarif aicritic.sarif --skip-checker
+- uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: aicritic.sarif
+```
+
+Findings render as PR annotations and appear in the repo's Security tab.
+Dismissed alerts are tracked across runs by GitHub — free feedback loop.
+
 ### Filter noise — only surface HIGH findings
 
 ```bash
@@ -173,10 +200,12 @@ python aicritic.py check <target> [flags]
 | `--coverage FILE` | — | coverage.xml from `coverage xml` |
 | `--min-risk LEVEL` | low | Show findings at or above: low / medium / high |
 | `--skip-checker` | off | Skip Gemini cross-check — Sonnet → Opus only (~20s vs ~90s) |
+| `--parallel` | off | Run Sonnet + Gemini in parallel as independent analyses (~50s vs ~90s) |
 | `--fix` | off | Run fixer stage after critic |
 | `--dry-run` | off | With `--fix`: show diff only, no writes |
 | `--roles DIR` | roles/ | Custom roles directory (overrides `--tool`) |
 | `--output FILE` | aicritic_report.md | Where to save the markdown report |
+| `--sarif FILE` | — | Also write SARIF 2.1.0 JSON for GitHub code-scanning upload |
 
 ---
 

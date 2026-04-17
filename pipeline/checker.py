@@ -4,6 +4,14 @@ import config
 from pipeline import parse_llm_json
 
 
+_INDEPENDENT_INSTRUCTION = (
+    "\n\n## Independent Mode\n"
+    "You are running in PARALLEL with the primary analyst — you do NOT have their findings. "
+    "Analyse the code yourself from scratch and report what you find. "
+    "Leave `agreements` and `disagreements` empty (the critic stage will reconcile)."
+)
+
+
 def skipped_result(reason: str, role: dict = None) -> dict:
     """Return a synthetic checker result that downstream stages can consume safely."""
     return {
@@ -19,8 +27,19 @@ def skipped_result(reason: str, role: dict = None) -> dict:
     }
 
 
-def run_checker(inputs: dict, analyst_output: dict, roles_dir: str = None) -> dict:
-    """Step 2: Gemini — cross-checker, receives source + Sonnet's findings.
+def run_checker(
+    inputs: dict,
+    analyst_output: dict = None,
+    roles_dir: str = None,
+    independent: bool = False,
+) -> dict:
+    """Step 2: Gemini — cross-checker.
+
+    Two modes:
+      - sequential (default): analyst_output is provided; Gemini reviews the
+        analyst's findings (slower, more rigorous)
+      - independent: analyst_output is ignored; Gemini analyses the source
+        independently in parallel with the analyst (faster)
 
     Never raises. If the model call fails or the response can't be parsed,
     returns a skipped_result so the pipeline can continue with analyst-only data.
@@ -34,6 +53,9 @@ def run_checker(inputs: dict, analyst_output: dict, roles_dir: str = None) -> di
         )
 
         base_prompt = config.SYSTEM_PROMPTS["checker"]
+        if independent:
+            base_prompt = base_prompt + _INDEPENDENT_INSTRUCTION
+
         system_prompt = (
             f"{base_prompt}\n\n"
             f"## Role Instructions\n{role['instructions']}"
@@ -46,13 +68,15 @@ def run_checker(inputs: dict, analyst_output: dict, roles_dir: str = None) -> di
         ]
         source_text = "\n\n".join(source_parts)
 
-        analyst_clean = {k: v for k, v in analyst_output.items() if not k.startswith("_")}
-        analyst_json  = json.dumps(analyst_clean, indent=2)
-
-        user_message = (
-            f"# Source Code\n\n{source_text}\n\n"
-            f"# Primary Analyst Findings\n\n```json\n{analyst_json}\n```"
-        )
+        if independent or not analyst_output:
+            user_message = f"# Source Code\n\n{source_text}\n"
+        else:
+            analyst_clean = {k: v for k, v in analyst_output.items() if not k.startswith("_")}
+            analyst_json  = json.dumps(analyst_clean, indent=2)
+            user_message = (
+                f"# Source Code\n\n{source_text}\n\n"
+                f"# Primary Analyst Findings\n\n```json\n{analyst_json}\n```"
+            )
 
         response = client.chat.completions.create(
             model=role["model"],
@@ -69,4 +93,6 @@ def run_checker(inputs: dict, analyst_output: dict, roles_dir: str = None) -> di
         return skipped_result(f"{type(e).__name__}: {e}", role)
 
     result["_role_config"] = role
+    if independent:
+        result["_independent"] = True
     return result
