@@ -22,3 +22,10 @@ diff_only: true
 # Trade-off: slightly less thorough; recommended for large teams with
 # many PRs where speed matters more than maximum coverage.
 skip_checker: false
+
+# Minimum test coverage percentage (line rate) required to pass the CI gate.
+# Evaluated against the coverage.xml file supplied via --coverage.
+# The CI gate exits with code 2 if coverage drops below this floor.
+# Comment out (or remove) to disable coverage enforcement.
+# Example: require 70% coverage across all analysed files.
+# min_coverage: 70

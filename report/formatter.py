@@ -236,6 +236,67 @@ def print_pattern_advisor(result: dict) -> None:
     console.print()
 
 
+def print_test_generator(result: dict) -> None:
+    """Console output for the test generation stage."""
+    from pipeline.test_generator import coverage_trend_summary
+
+    console.print("\n[bold magenta][[T] Test Generator[/bold magenta]  [dim](coverage intelligence)[/dim]")
+
+    # Coverage trend
+    trend = coverage_trend_summary(result)
+    if trend:
+        color = "red bold" if result.get("policy_violation") else "green"
+        console.print(f"  [{color}]{trend}[/{color}]")
+
+    # Per-file deltas where coverage dropped
+    for fname, d in result.get("per_file_delta", {}).items():
+        delta = d.get("delta")
+        if delta is not None and delta < -0.5:
+            console.print(
+                f"  [yellow]↓ {fname}[/yellow]  "
+                f"{d.get('prev','?')}% → {d.get('curr','?')}%  "
+                f"([red]{delta:+.1f}%[/red])"
+            )
+
+    if result.get("policy_violation"):
+        floor = result.get("policy_floor", "?")
+        curr  = result.get("overall_coverage", "?")
+        console.print(
+            f"\n  [bold red]⚠ Coverage below policy floor[/bold red]  "
+            f"({curr:.1f}% < {floor}% — set in .aicritic-policy.yaml)"
+        )
+
+    # Generated tests
+    tests = result.get("tests", [])
+    targets = result.get("targets", [])
+    if targets and not tests:
+        console.print(f"  [dim]{len(targets)} high-risk uncovered path(s) found — no tests generated.[/dim]")
+    elif tests:
+        framework = result.get("framework", "")
+        console.print(
+            f"  [green]✔ {len(tests)} test(s) generated[/green]  "
+            f"[dim]framework={framework}[/dim]"
+        )
+        for t in tests:
+            console.print(
+                f"    [dim]→ {t.get('test_function_name','test_?')}  "
+                f"({t.get('target_file','')})  [{t.get('finding_risk','?').upper()}][/dim]"
+            )
+        if result.get("output_file"):
+            console.print(
+                f"  [bold green]Tests written to:[/bold green] {result['output_file']}"
+            )
+            console.print(
+                "  [dim italic]Review generated tests before committing — "
+                "they are NOT auto-committed.[/dim italic]"
+            )
+
+    summary = result.get("summary", "")
+    if summary:
+        console.print(f"\n  [italic]{summary}[/italic]")
+    console.print()
+
+
 def print_footer(report_path: str) -> None:
     console.print()
     console.print("─" * 52)
@@ -306,6 +367,7 @@ def save_markdown(
     output_path: str = None,
     explainer: dict = None,
     pattern_advisor: dict = None,
+    test_generator: dict = None,
 ) -> str:
     if output_path is None:
         output_path = config.REPORT_FILE
@@ -495,6 +557,55 @@ def save_markdown(
         if pa_summary:
             lines += [f"> {pa_summary}", ""]
 
+    if test_generator and (test_generator.get("tests") or test_generator.get("overall_coverage") is not None):
+        from pipeline.test_generator import coverage_trend_summary
+        lines += ["", "---", "", "## Test Coverage Intelligence", ""]
+
+        trend = coverage_trend_summary(test_generator)
+        if trend:
+            lines.append(f"**{trend}**\n")
+
+        per_file = test_generator.get("per_file_delta", {})
+        drops = [(f, d) for f, d in per_file.items() if d.get("delta") is not None and d["delta"] < -0.5]
+        if drops:
+            lines += ["### Coverage drops this run", "", "| File | Previous | Current | Delta |",
+                      "|------|----------|---------|-------|"]
+            for fname, d in drops:
+                lines.append(f"| `{fname}` | {d.get('prev','?')}% | {d.get('curr','?')}% | **{d['delta']:+.1f}%** |")
+            lines.append("")
+
+        if test_generator.get("policy_violation"):
+            lines.append(
+                f"> ⚠ **Coverage below policy floor** "
+                f"({test_generator.get('overall_coverage','?'):.1f}% < "
+                f"{test_generator.get('policy_floor','?')}%)\n"
+            )
+
+        tests = test_generator.get("tests", [])
+        if tests:
+            framework = test_generator.get("framework", "")
+            out_file = test_generator.get("output_file", "")
+            lines += [f"### Generated Tests ({framework})", ""]
+            if out_file:
+                lines.append(f"_Written to `{out_file}` — review before committing._\n")
+            for t in tests:
+                lines += [
+                    f"#### `{t.get('test_function_name','test_?')}`",
+                    f"**Covers:** `{t.get('target_file','')}` — "
+                    f"[{t.get('finding_risk','?').upper()}] {t.get('finding_description','')}",
+                    "",
+                    f"_{t.get('explanation','')}_",
+                    "",
+                    "```python",
+                    t.get("test_code", "").strip(),
+                    "```",
+                    "",
+                ]
+
+        tg_summary = test_generator.get("summary", "")
+        if tg_summary:
+            lines += [f"> {tg_summary}", ""]
+
     Path(output_path).write_text("\n".join(lines), encoding="utf-8")
     return output_path
 
@@ -511,6 +622,7 @@ def save_json(
     output_path: str,
     explainer: dict = None,
     pattern_advisor: dict = None,
+    test_generator: dict = None,
 ) -> str:
     """Write the full run results as a single JSON document."""
     payload = {
@@ -526,6 +638,8 @@ def save_json(
         payload["explanations"] = explainer.get("explanations", [])
     if pattern_advisor:
         payload["pattern_advisor"] = {k: v for k, v in pattern_advisor.items() if not k.startswith("_")}
+    if test_generator:
+        payload["test_generator"] = {k: v for k, v in test_generator.items() if not k.startswith("_")}
     Path(output_path).write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return output_path
 
@@ -674,6 +788,77 @@ def _pattern_advisor_html(result: dict | None) -> str:
     return html
 
 
+def _test_generator_html(result: dict | None) -> str:
+    if not result or (not result.get("tests") and result.get("overall_coverage") is None):
+        return ""
+    from pipeline.test_generator import coverage_trend_summary
+
+    trend = coverage_trend_summary(result)
+    tests = result.get("tests", [])
+    per_file = result.get("per_file_delta", {})
+    drops = [(f, d) for f, d in per_file.items() if d.get("delta") is not None and d["delta"] < -0.5]
+    violation = result.get("policy_violation", False)
+
+    html = (
+        "<h2>Test Coverage Intelligence</h2>"
+        "<style>"
+        ".tg-card{background:#fdf4ff;border-left:4px solid #a855f7;"
+        "padding:14px 18px;margin:16px 0;border-radius:0 6px 6px 0}"
+        ".tg-warn{background:#fef3c7;border-left:4px solid #f59e0b;"
+        "padding:10px 14px;margin:10px 0;border-radius:0 4px 4px 0}"
+        "pre.testcode{background:#f8f9fa;padding:10px;border-radius:4px;overflow-x:auto;font-size:.85em}"
+        "</style>"
+    )
+
+    if trend:
+        color = "#dc2626" if violation else "#16a34a"
+        html += f'<p style="font-weight:bold;color:{color}">{trend}</p>'
+
+    if violation:
+        html += (
+            f'<div class="tg-warn">⚠ <strong>Coverage below policy floor</strong> — '
+            f'{result.get("overall_coverage","?"):.1f}% &lt; {result.get("policy_floor","?")}% '
+            f'(set in .aicritic-policy.yaml)</div>'
+        )
+
+    if drops:
+        rows = "".join(
+            f"<tr><td><code>{f}</code></td>"
+            f"<td>{d.get('prev','?')}%</td>"
+            f"<td>{d.get('curr','?')}%</td>"
+            f"<td style='color:#dc2626'>{d['delta']:+.1f}%</td></tr>"
+            for f, d in drops
+        )
+        html += (
+            "<h3>Coverage drops this run</h3>"
+            "<table><tr><th>File</th><th>Previous</th><th>Current</th><th>Delta</th></tr>"
+            f"{rows}</table>"
+        )
+
+    if tests:
+        framework = result.get("framework", "")
+        out_file = result.get("output_file", "")
+        html += f"<h3>Generated Tests ({framework})</h3>"
+        if out_file:
+            html += f'<p><em>Written to <code>{out_file}</code> — review before committing.</em></p>'
+        for t in tests:
+            code = t.get("test_code", "").strip().replace("<", "&lt;").replace(">", "&gt;")
+            html += (
+                f'<div class="tg-card">'
+                f'<h4><code>{t.get("test_function_name","test_?")}</code></h4>'
+                f'<p><strong>Covers:</strong> <code>{t.get("target_file","")}</code> — '
+                f'{_badge(t.get("finding_risk","low"))} {t.get("finding_description","")}</p>'
+                f'<p><em>{t.get("explanation","")}</em></p>'
+                f'<pre class="testcode">{code}</pre>'
+                f'</div>'
+            )
+
+    if result.get("summary"):
+        html += f'<div class="summary">{result["summary"]}</div>'
+
+    return html
+
+
 def save_html(
     target: str,
     analyst: dict,
@@ -682,6 +867,7 @@ def save_html(
     output_path: str,
     explainer: dict = None,
     pattern_advisor: dict = None,
+    test_generator: dict = None,
 ) -> str:
     """Write a self-contained HTML report with inline CSS."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -748,6 +934,7 @@ def save_html(
 {recs_html}
 {_explain_html(explainer)}
 {_pattern_advisor_html(pattern_advisor)}
+{_test_generator_html(test_generator)}
 </body>
 </html>"""
 

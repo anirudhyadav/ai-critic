@@ -58,6 +58,9 @@ You receive a task in natural language and complete it using the tools available
 - Only call open_pr() when the task explicitly asks for a pull request.
 - After apply_fixes(): call run_shell() with a test/lint command only if one is
   obvious from context (e.g. "pytest", "ruff check .").
+- Call generate_tests() when the task mentions tests, coverage, or "write tests".
+  Provide output_file= if the task names a destination; otherwise omit it.
+  Always surface the coverage trend and remind the user tests need review.
 - Call save_baseline() only when explicitly asked.
 
 ## Finishing

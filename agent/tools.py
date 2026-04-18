@@ -264,6 +264,40 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "generate_tests",
+            "description": (
+                "Generate runnable tests for high-risk code paths that lack coverage. "
+                "Detects the project test framework (pytest/jest/go_test/etc.), finds the "
+                "intersection of HIGH/CRITICAL findings and uncovered lines, then uses "
+                "Claude Sonnet to write complete tests with real names and realistic inputs. "
+                "Also tracks coverage trend across runs and warns if coverage drops below "
+                "the policy floor. Requires run_analysis or critique() first. "
+                "Tests are written to output_file — NEVER auto-committed."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "output_file": {
+                        "type": "string",
+                        "description": (
+                            "File or directory to write generated tests. "
+                            "If a directory, a filename is auto-chosen (e.g. tests/test_aicritic_generated.py). "
+                            "If omitted, tests are returned but not written to disk."
+                        ),
+                    },
+                    "min_risk": {
+                        "type": "string",
+                        "enum": ["high", "critical"],
+                        "description": "Only generate tests for findings at or above this risk (default: high)",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "save_baseline",
             "description": (
                 "Save the current run's findings as a baseline so future runs "
@@ -613,6 +647,81 @@ def _handle_refactor(args: dict, session: AgentSession) -> str:
     return "\n".join(lines)
 
 
+def _handle_generate_tests(args: dict, session: AgentSession) -> str:
+    if not session.critic_result and not session.analyst_result:
+        return "Error: no analysis results — call run_analysis or critique() first."
+    if not session.inputs:
+        return "Error: no files loaded."
+
+    from pipeline.test_generator import run_test_generator, coverage_trend_summary
+
+    critic = session.critic_result or session.analyst_result
+    output_file = args.get("output_file")
+
+    try:
+        result = run_test_generator(
+            inputs=session.inputs,
+            critic_result=critic,
+            target=session.target,
+            output_file=output_file,
+            token=session.token,
+        )
+    except Exception as e:
+        return f"Test generator error: {e}"
+
+    session.log(f"generate_tests: {len(result.get('tests', []))} test(s) generated")
+
+    lines = []
+
+    trend = coverage_trend_summary(result)
+    if trend:
+        lines.append(f"Coverage: {trend}")
+
+    if result.get("policy_violation"):
+        lines.append(
+            f"⚠ Coverage below policy floor: {result.get('overall_coverage','?'):.1f}% "
+            f"< {result.get('policy_floor','?')}%"
+        )
+
+    drops = [
+        (f, d) for f, d in result.get("per_file_delta", {}).items()
+        if d.get("delta") is not None and d["delta"] < -0.5
+    ]
+    for fname, d in drops:
+        lines.append(f"  ↓ {fname}: {d.get('prev','?')}% → {d.get('curr','?')}%  ({d['delta']:+.1f}%)")
+
+    tests = result.get("tests", [])
+    targets = result.get("targets", [])
+
+    if not targets:
+        lines.append("No high-risk uncovered paths found — nothing to generate.")
+    elif not tests:
+        lines.append(f"{len(targets)} high-risk path(s) found but test generation produced no output.")
+    else:
+        lines.append(
+            f"Generated {len(tests)} test(s) for {len(targets)} high-risk path(s) "
+            f"(framework: {result.get('framework','?')}):"
+        )
+        for t in tests:
+            lines.append(
+                f"  {t.get('test_function_name','test_?')}  "
+                f"→ {t.get('target_file','')}  [{t.get('finding_risk','?').upper()}]"
+            )
+        if output_file:
+            lines.append(f"\nTests written to: {output_file}")
+            lines.append("⚠ Review generated tests before committing — they are NOT auto-committed.")
+        else:
+            # Surface the first test code so the agent can see it
+            first = tests[0].get("test_code", "")
+            if first:
+                lines.append(f"\nFirst generated test:\n```\n{first[:1200]}\n```")
+
+    if result.get("summary"):
+        lines.append(f"\n{result['summary']}")
+
+    return "\n".join(lines)
+
+
 def _handle_save_baseline(args: dict, session: AgentSession) -> str:
     if not session.critic_result:
         return "Error: no analysis results — call run_analysis first."
@@ -643,6 +752,7 @@ _HANDLERS = {
     "write_file":        _handle_write_file,
     "run_shell":         _handle_run_shell,
     "refactor":          _handle_refactor,
+    "generate_tests":    _handle_generate_tests,
     "save_baseline":     _handle_save_baseline,
 }
 
