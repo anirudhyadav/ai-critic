@@ -7,8 +7,8 @@ block_on: [critical, high]
 
 # Analysis profile to use. Leave blank for security_review (default).
 # Options: security_review, secrets_scan, error_handling, performance,
-#          pr_review, test_quality, migration_safety, dependency_audit,
-#          dockerfile_review, iac_review
+#          pr_review, test_quality, migration_safety, code_coverage,
+#          dependency_audit, dockerfile_review, iac_review, design_review
 tool: security_review
 
 # Minimum risk level to include in the report (does not affect blocking).
@@ -23,9 +23,8 @@ diff_only: true
 # many PRs where speed matters more than maximum coverage.
 skip_checker: false
 
-# Minimum test coverage percentage (line rate) required to pass the CI gate.
-# Evaluated against the coverage.xml file supplied via --coverage.
-# The CI gate exits with code 2 if coverage drops below this floor.
+# Minimum test coverage percentage (line rate) required to pass the gate.
+# Only enforced when the run loads coverage data (typically `check --coverage coverage.xml`).
+# Exits with code 2 if overall coverage is below this floor.
 # Comment out (or remove) to disable coverage enforcement.
-# Example: require 70% coverage across all analysed files.
 # min_coverage: 70

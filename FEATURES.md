@@ -1,6 +1,54 @@
 # aicritic — Feature Reference
 
-Complete listing of every capability, flag, and integration point.
+**This file is the single feature reference** for capabilities, flags, and integrations. Install and quick start: [README.md](README.md); how-tos: [runbooks/](runbooks/). If anything here disagrees with the code, treat **`aicritic.py`**, **`policy.py`**, and **`config.py`** as authoritative.
+
+### Quick map
+
+| Looking for… | Section |
+|--------------|---------|
+| **Mermaid workflow diagrams** | [Workflow diagrams](#workflow-diagrams-mermaid) |
+| Pipeline, `--skip-checker`, `--parallel`, adaptive Gemini, batching | [§1](#1-analysis-pipeline) · cache [§13](#13-pipeline-result-cache) |
+| Tool profiles, `--roles`, `code_coverage`, `design_review` | [§2](#2-tool-profiles) · [§16](#16-custom-roles) |
+| `--explain` | [§3](#3---explain-mode) |
+| `--diff` | [§4](#4-diff-and-incremental-analysis) |
+| Baseline / delta | [§5](#5-baseline-and-delta-mode) |
+| Suppressions | [§6](#6-inline-suppression) |
+| `--fix`, `--pr`, `--generate-tests` | [§7](#7-auto-fix-and-auto-pr) |
+| `ci`, `.aicritic-policy.yaml` | [§8](#8-ci-policy-gate) |
+| Agent mode | [§9](#9-agent-mode) |
+| Copilot extension, org, audit | [§10](#10-copilot-extension) · [§18](#18-org-deployment) · [§19](#19-audit-log) |
+| Markdown / HTML / JSON / SARIF | [§11](#11-output-formats) |
+| Slack / Teams | [§12](#12-notifications) |
+| Languages, `.aicriticignore` | [§14](#14-multi-language-support) |
+| Pre-commit | [§15](#15-pre-commit-hooks) |
+| `.aicritic.yaml` | [§17](#17-project-config) |
+
+**`.aicritic-patterns.yaml`** — `patterns_config.py` (used with **`design_review`**). Test generation is documented under [§7](#7-auto-fix-and-auto-pr).
+
+| | |
+|---|---|
+| **Subcommands** | `check` · `ci` · `agent` · `cache-clear` |
+| **Shorthand** | `python aicritic.py "…task…" <path>` runs **`agent`** when the first token is not a subcommand |
+| **Exit codes** | `0` pass · `1` blocking findings · `2` coverage below policy (`ci` / `check` — see `aicritic.py`) |
+| **Adaptive checker** | Gemini skipped if analyst has no HIGH/CRITICAL — **`--full`** always runs it |
+| **Run modes** | `--skip-checker` · `--parallel` (if both conflict with skip, skip wins) |
+
+**Built-in `--tool` values:** `secrets_scan` · `error_handling` · `pr_review` · `performance` · `migration_safety` · `test_quality` · `code_coverage` · `dependency_audit` · `dockerfile_review` · `iac_review` · `design_review` — default without `--tool` uses **`security_review`**-style roles under `roles/`.
+
+**Cache env:** `AICRITIC_CACHE_TTL` (`0` disables) · `AICRITIC_CACHE_DIR` — details [§13](#13-pipeline-result-cache).
+
+### Other documentation
+
+| | |
+|---|---|
+| [README.md](README.md) | Install, quick start |
+| [runbooks/cli.md](runbooks/cli.md) | CLI narrative |
+| [runbooks/ci-cd.md](runbooks/ci-cd.md) | GitHub Actions, branch protection |
+| [runbooks/agent.md](runbooks/agent.md) | Agent mode |
+| [runbooks/copilot-extension.md](runbooks/copilot-extension.md) | GitHub App, VS Code |
+| [runbooks/org-deployment.md](runbooks/org-deployment.md) | Org-wide deployment |
+| [`.github/workflows/aicritic.yml`](.github/workflows/aicritic.yml) | Example workflow |
+| [`benchmarks/`](benchmarks/) | Benchmark cases |
 
 ---
 
@@ -26,6 +74,108 @@ Complete listing of every capability, flag, and integration point.
 18. [Org deployment](#18-org-deployment)
 19. [Audit log](#19-audit-log)
 
+- [Workflow diagrams (Mermaid)](#workflow-diagrams-mermaid)
+
+---
+
+## Workflow diagrams (Mermaid)
+
+GitHub and many Markdown renderers show these as diagrams. The **HTTP Copilot server** always runs Sonnet → Gemini → Opus (no adaptive skip on the checker).
+
+**Static HTML:** open [`index.html`](index.html) in a browser (same diagrams, rendered by [Mermaid](https://mermaid.js.org/) via CDN).
+
+### Core pipeline — `aicritic check`
+
+```mermaid
+flowchart TB
+  subgraph ENTRY["Entry"]
+    CLI([check · benchmarks · agent analysis tools])
+  end
+
+  subgraph LOAD["Load & scope"]
+    L1["inputs.loader: paths, --diff, --lang"]
+    L2[".aicriticignore · skip binaries"]
+    L3["Optional coverage.xml"]
+    L4["Role prompts: --tool or --roles"]
+  end
+
+  subgraph BATCH["Large tree"]
+    B1["split_into_batches ~40KB+"]
+    B2["merge_stage_results"]
+  end
+
+  subgraph SEQ["Sequential path (default)"]
+    A["① Analyst · Claude Sonnet"]
+    D{HIGH/CRITICAL\nor --full?}
+    G["② Checker · Gemini"]
+    SK["_checker skipped"]
+    C["③ Critic · Claude Opus"]
+    A --> D
+    D -->|yes| G
+    D -->|no: adaptive default| SK
+    G --> C
+    SK --> C
+  end
+
+  CLI --> LOAD --> BATCH --> SEQ
+  L1 & L2 & L3 & L4 --> A
+```
+
+**Other modes (same critic):** **`--skip-checker`** — Analyst → Critic (no Gemini). **`--parallel`** — Analyst and Gemini run **concurrently** (independent passes), then Critic merges. Batching applies before stage ①.
+
+### After the critic — optional stages and outputs
+
+```mermaid
+flowchart LR
+  C["Critic output"]
+  F["min-risk · --baseline · suppressions"]
+  E["--explain"]
+  P["design_review: complexity + pattern advisor"]
+  T["--generate-tests"]
+  X["--fix · --dry-run · --pr"]
+  R["--output · --html · --json · --sarif"]
+  N["--notify-slack / --notify-teams"]
+
+  C --> F
+  F --> E
+  F --> P
+  F --> T
+  F --> X
+  F --> R
+  F --> N
+```
+
+### CI gate — `aicritic ci`
+
+```mermaid
+flowchart TB
+  POL[Load .aicritic-policy.yaml] --> DIFF{diff_only?}
+  DIFF -->|yes + GITHUB_BASE_REF| GIT[Changed files only]
+  DIFF -->|no / --no-diff| ALL[All files under target]
+  GIT & ALL --> RUN[Same pipeline as check]
+  RUN --> SUP[Apply suppressions]
+  SUP --> COV{min_coverage and coverage below floor?}
+  COV -->|yes| E2["Exit 2"]
+  COV -->|no or N/A| GATE{Blocking findings for block_on?}
+  GATE -->|yes| E1["Exit 1 · annotations · step summary"]
+  GATE -->|no| E0["Exit 0"]
+```
+
+### Agent mode — tool loop (simplified)
+
+```mermaid
+flowchart TB
+  T([Natural language task]) --> LLM[Claude · tool use]
+  LLM --> TOOLS{Tools}
+  TOOLS --> R1["read_files / get_changed_files"]
+  TOOLS --> R2["analyse · cross_check · critique"]
+  TOOLS --> R3["run_analysis shortcut"]
+  TOOLS --> R4["apply_fixes · open_pr"]
+  TOOLS --> R5["generate_tests · refactor · run_shell · save_baseline"]
+  R1 & R2 & R3 & R4 & R5 --> LLM
+  LLM --> DONE([Final reply])
+```
+
 ---
 
 ## 1. Analysis pipeline
@@ -40,6 +190,8 @@ stage's output and either validates or challenges it.
 | Critic | Claude Opus | Arbitrates disagreements, assigns final risk, writes fix plan |
 
 **Modes:**
+
+**Default (`check` on the CLI)** — If the analyst finds **no HIGH or CRITICAL** findings, the checker (Gemini) stage is **skipped** unless you pass **`--full`** to always run it. The Copilot HTTP server (`server.py`) always runs all three stages.
 
 `--skip-checker` — run Sonnet → Opus only (~20s vs ~90s). Faster; slightly
 less thorough. Recommended for large teams running on every commit.
@@ -70,9 +222,11 @@ Select a profile with `--tool <name>`.
 | `performance` | Speed/efficiency | N+1 queries, blocking I/O, inefficient data structures, missing caching |
 | `migration_safety` | Database ops | Lock contention, long transactions, data loss, failed rollback paths |
 | `test_quality` | Test coverage | Always-passing assertions, missing edge cases, happy-path-only tests |
+| `code_coverage` | Coverage vs risk | Untested high-risk paths; use with `--coverage` / `coverage.xml` |
 | `dependency_audit` | Supply chain | Outdated packages, known CVEs, licence conflicts, transitive bloat |
 | `dockerfile_review` | Container security | Root user, exposed secrets, large layers, missing health checks |
 | `iac_review` | Infrastructure | Open security groups, missing encryption, overly permissive IAM, hardcoded secrets |
+| `design_review` | Design / maintainability | Complexity, anti-patterns, pattern advisor; pairs with `.aicritic-patterns.yaml` |
 
 Each profile provides four role files (analyst, checker, critic, fixer) tuned
 for that domain. Use `--roles <dir>` to provide your own.
@@ -210,6 +364,10 @@ files, pushes, and calls `POST /repos/{owner}/{repo}/pulls`. After the PR is
 opened, posts an inline GitHub review with one comment per finding pinned to the
 exact line.
 
+### Test generation (`--generate-tests`)
+
+After analysis, optionally generate runnable tests aimed at **high-risk, under-covered** code. Detects the test framework from the repo; tracks coverage in `.aicritic-coverage-history.json`. Set **`min_coverage`** in `.aicritic-policy.yaml` to enforce a floor — `check` or `ci` can exit **2** if coverage is below that threshold. **`--auto-commit-tests`** must be set explicitly before generated tests are allowed to be committed. See `pipeline/test_generator.py`.
+
 ---
 
 ## 8. CI policy gate
@@ -224,6 +382,7 @@ tool: security_review        # analysis profile
 min_risk: low                # minimum risk to include in the report
 diff_only: true              # analyse changed files only (recommended)
 skip_checker: false          # skip Gemini for speed
+# min_coverage: 70           # optional: CI exits 2 if line coverage is below this %
 ```
 
 **GitHub Actions workflow** (`.github/workflows/aicritic.yml`):
@@ -244,7 +403,7 @@ skip_checker: false          # skip Gemini for speed
    - ❌ Blocking findings table
    - ℹ️ Below-threshold findings
    - 🔕 Suppressed findings with accepted-risk reasons
-6. Exits 1 (blocked) or 0 (passed).
+6. Exits **0** (passed), **1** (blocking findings), or **2** (coverage below `min_coverage` when that policy is set — see `aicritic.py`).
 
 **Exit codes:**
 
@@ -252,6 +411,9 @@ skip_checker: false          # skip Gemini for speed
 |------|---------|
 | 0 | No blocking findings — PR can merge |
 | 1 | One or more blocking findings — PR is blocked |
+| 2 | Coverage floor failed (`min_coverage` in policy), or same from `check` when test-generation policy applies |
+
+**Coverage gate:** `min_coverage` is only evaluated when overall line coverage can be computed from the loaded **`inputs`** (typically `python aicritic.py check … --coverage coverage.xml`). The stock **`aicritic ci`** invocation does not load a coverage file unless you extend your workflow to pass one into a custom step or merge coverage the same way `check` does.
 
 **Running locally** (same logic, no GitHub-specific output):
 ```bash
@@ -275,14 +437,19 @@ python aicritic.py agent "check what changed since main and open a PR with fixes
 
 | Tool | What it does |
 |------|-------------|
-| `get_changed_files` | List files changed vs a git ref |
-| `read_files` | Load source files into session |
+| `get_changed_files` | Load files changed vs a git ref into the session |
+| `read_files` | Load source files from the target into the session |
 | `read_file` | Read a single file |
-| `write_file` | Write a file (for targeted edits) |
-| `run_analysis` | Run the three-model chain |
+| `write_file` | Write a file (small targeted edits) |
+| `run_analysis` | Run the full three-model chain in one call |
+| `analyse` | Analyst (Sonnet) only |
+| `cross_check` | Checker (Gemini) — use after `analyse` when needed |
+| `critique` | Critic (Opus) — final verdict after `analyse` (and usually after `cross_check` if used) |
 | `apply_fixes` | Apply critic recommendations |
 | `open_pr` | Create branch, push, open GitHub PR with inline review comments |
-| `run_shell` | Run a linter or test command |
+| `run_shell` | Run a linter or test command (sandboxed to target) |
+| `refactor` | Design pattern advisor (complexity, anti-patterns) |
+| `generate_tests` | Generate tests for high-risk gaps; optional `output_file` |
 | `save_baseline` | Persist findings as baseline |
 
 **Flags:**

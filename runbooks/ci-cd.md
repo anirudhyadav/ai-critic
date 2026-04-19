@@ -97,6 +97,8 @@ skip_checker: false
 
 If the file is absent, defaults are used: `block_on: [critical, high]`, `diff_only: true`.
 
+Optional **`min_coverage`** (e.g. `min_coverage: 70`) fails with exit **`2`** when overall coverage is known and below the floor. Coverage must be loaded into the run (usually **`check --coverage coverage.xml`**). The default **`ci .`** step does not pass `--coverage`; add a job that produces `coverage.xml` and wire analysis to load it if you want this gate in Actions — see [FEATURES.md](../FEATURES.md) §8.
+
 **Recommended settings by team size:**
 
 | Team | Recommended policy |
@@ -250,7 +252,7 @@ python aicritic.py ci src/ --policy .aicritic-policy.yaml
 python aicritic.py ci src/ --no-diff
 ```
 
-Exit 0 = would pass. Exit 1 = would block.
+Exit **`0`** = would pass. Exit **`1`** = blocking findings. Exit **`2`** = coverage below **`min_coverage`** when that key is set in `.aicritic-policy.yaml` (and the gate can compute coverage).
 
 ---
 

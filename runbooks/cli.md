@@ -2,10 +2,12 @@
 
 ```bash
 python aicritic.py check <target>            # analyse files
-python aicritic.py ci    <target>            # CI gate — exits 1 on blocking findings
+python aicritic.py ci    <target>            # CI gate — see exit codes below
 python aicritic.py agent "<task>" <target>   # autonomous agent mode
 python aicritic.py cache-clear               # delete cached results
 ```
+
+Exit codes for **`ci`**: `0` pass · `1` blocking findings · `2` coverage below `min_coverage` (when set in `.aicritic-policy.yaml`). Same `2` can apply to **`check`** when test generation violates the coverage floor — see [FEATURES.md](../FEATURES.md) §7–8.
 
 ---
 
@@ -48,6 +50,7 @@ python aicritic.py check src/ --tool migration_safety
 python aicritic.py check src/ --tool dependency_audit
 python aicritic.py check src/ --tool dockerfile_review
 python aicritic.py check src/ --tool iac_review
+python aicritic.py check src/ --tool code_coverage --coverage coverage.xml
 ```
 
 `design_review` automatically enables `--explain` and runs the pattern advisor
@@ -130,9 +133,14 @@ Works in Python (`#`), JS/Go/Rust (`//`), SQL (`--`), CSS (`/* */`).
 
 ## I want to run faster
 
+By default, **`check`** skips the Gemini stage when the analyst finds **no HIGH or CRITICAL** findings (saves ~60s). Use **`--full`** to always run Gemini.
+
 ```bash
 # Skip the Gemini cross-check (~20s instead of ~90s)
 python aicritic.py check src/ --skip-checker
+
+# Always run Gemini even when there are no HIGH/CRITICAL analyst findings
+python aicritic.py check src/ --full
 
 # Run Sonnet and Gemini in parallel (independent, not sequential)
 python aicritic.py check src/ --parallel
@@ -201,8 +209,8 @@ CLI flags always override the file. aicritic walks up from the target directory 
 GITHUB_BASE_REF=main python aicritic.py ci src/
 ```
 
-Same pipeline as `check` but uses `.aicritic-policy.yaml` rules and exits 1 on blocking findings.
-See [ci-cd.md](ci-cd.md) for the full CI setup.
+Same pipeline as `check` but uses `.aicritic-policy.yaml` rules. Exits **`1`** on blocking findings, **`2`** if `min_coverage` is set and coverage is below the floor.
+See [ci-cd.md](ci-cd.md) and [FEATURES.md](../FEATURES.md) §8.
 
 ---
 
@@ -218,8 +226,11 @@ See [ci-cd.md](ci-cd.md) for the full CI setup.
 | `--pr` | off | With `--fix`: open a GitHub PR |
 | `--min-risk LEVEL` | `low` | Only surface `low`/`medium`/`high` and above |
 | `--skip-checker` | off | Skip Gemini cross-check (~20s vs ~90s) |
+| `--full` | off | Always run Gemini when not using `--skip-checker` (overrides default adaptive skip) |
 | `--parallel` | off | Run Sonnet + Gemini simultaneously |
 | `--lang LANG` | all | Language filter (repeatable) |
+| `--generate-tests FILE` | — | Generate tests for high-risk gaps (see [FEATURES.md](../FEATURES.md) §7) |
+| `--auto-commit-tests` | off | Allow committing generated tests (must be explicit) |
 | `--baseline FILE` | — | Suppress findings in this baseline |
 | `--save-baseline FILE` | — | Save current findings as baseline |
 | `--output FILE` | `aicritic_report.md` | Markdown report path |

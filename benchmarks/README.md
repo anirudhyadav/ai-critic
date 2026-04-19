@@ -84,3 +84,7 @@ raw per-finding output if you want to inspect.
   for the wrong reason. Counter this by using more specific keywords.
 - Fixture set is small (3 cases). Adding more raises the ceiling.
 - Every run costs LLM calls — `--skip-checker` cuts that roughly in half.
+
+## See also
+
+- [FEATURES.md](../FEATURES.md) — pipeline stages, flags, and adaptive checker behaviour on **`check`**

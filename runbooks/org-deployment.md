@@ -44,11 +44,7 @@ You need:
 
 Pick your deployment option:
 
-**Docker:**
-```bash
-docker build -t aicritic .
-docker run -p 8000:8000 --env-file .env aicritic
-```
+**Docker:** This repository does not include a `Dockerfile`. Use a Python 3.11+ base image, install with `pip install -r requirements.txt`, copy the project, set env vars, and run `uvicorn server:app --host 0.0.0.0 --port 8000` (or `gunicorn` as below).
 
 **Railway / Render / Fly.io:**
 ```bash

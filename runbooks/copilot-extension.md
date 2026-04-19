@@ -155,6 +155,19 @@ with no individual API keys.
 
 ---
 
+## Behaviour note (vs `check` on the CLI)
+
+The HTTP server runs the **analyst, checker, and critic** stages for each request (no “adaptive skip” of Gemini). The CLI command **`check`** may skip Gemini when there are no HIGH/CRITICAL analyst findings unless you pass **`--full`** — see [FEATURES.md](../FEATURES.md) §1 and [cli.md](cli.md).
+
+---
+
+## See also
+
+- [FEATURES.md](../FEATURES.md) — full capability reference
+- [cli.md](cli.md) — terminal flags including `--explain`, `--full`, `--fix`
+
+---
+
 ## Troubleshooting
 
 **`@aicritic` doesn't appear in VS Code**

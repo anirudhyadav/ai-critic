@@ -9,7 +9,7 @@ You'll have your first analysis running in under 5 minutes.
 ```bash
 git clone https://github.com/anirudhyadav/ai-critic
 cd ai-critic
-pip install -e .
+pip install -r requirements.txt
 cp .env.example .env
 ```
 
@@ -41,7 +41,7 @@ Point it at a file or directory:
 python aicritic.py check src/
 ```
 
-You'll see three stages run, then a verdict:
+You'll see up to three stages run (Gemini may be skipped on **`check`** when there are no HIGH/CRITICAL analyst findings unless you pass **`--full`**), then a verdict:
 
 ```
   [1/3] Claude Sonnet
@@ -180,6 +180,7 @@ Setup takes about 10 minutes: [copilot-extension.md](copilot-extension.md)
 | Scan for secrets | add `--tool secrets_scan` |
 | Review design | add `--tool design_review` |
 | Skip Gemini (faster) | add `--skip-checker` |
+| Always run Gemini | add `--full` (CLI skips Gemini by default when no HIGH/CRITICAL) |
 | Only HIGH+ findings | add `--min-risk high` |
 | Save HTML report | add `--html report.html` |
 
@@ -187,6 +188,7 @@ Setup takes about 10 minutes: [copilot-extension.md](copilot-extension.md)
 
 **Next steps**
 
+- [FEATURES.md](../FEATURES.md) — single feature reference (quick map + full detail)
 - [CLI reference](cli.md) — every flag explained with examples
 - [CI/CD setup](ci-cd.md) — GitHub Actions gate, policy file, suppression
 - [Copilot Extension](copilot-extension.md) — `@aicritic` in VS Code

@@ -144,14 +144,18 @@ Fixed 1 HIGH issue. PR: https://github.com/org/repo/pull/42
 | `read_files(languages)` | Load all source files from the target |
 | `read_file(path)` | Read a single file |
 | `write_file(path, content)` | Write a file |
-| `run_analysis(tool)` | Run the full Sonnet → Gemini → Opus pipeline |
+| `run_analysis(tool)` | Run the full Sonnet → Gemini → Opus pipeline in one call |
+| `analyse(tool)` | Analyst (Sonnet) only |
+| `cross_check()` | Checker (Gemini) — after `analyse` when needed |
+| `critique()` | Critic (Opus) — final verdict |
 | `apply_fixes(min_risk)` | Apply critic recommendations to source files |
-| `refactor` | Run design pattern advisor (complexity + anti-patterns + opportunities) |
+| `refactor` | Design pattern advisor (complexity + anti-patterns + opportunities) |
+| `generate_tests(output_file)` | Tests for high-risk uncovered paths |
 | `open_pr(title)` | Create branch, push, open PR with inline review comments |
 | `run_shell(command)` | Run a shell command (tests, linter, syntax check) |
 | `save_baseline(path)` | Save current findings as a baseline |
 
-The agent decides which tools to call and in what order based on your task.
+The agent decides which tools to call and in what order based on your task. Full detail: [FEATURES.md](../FEATURES.md) §9.
 
 ---
 
