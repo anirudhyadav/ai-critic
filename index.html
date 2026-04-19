@@ -71,6 +71,9 @@ flowchart TB
     L2[".aicriticignore · skip binaries"]
     L3["Optional coverage.xml"]
     L4["Role prompts: --tool or --roles"]
+    L5[".aicritic.yaml (project_config)"]
+    L6[".aicritic-patterns.yaml (patterns_config)"]
+    L7["complexity metrics (inputs/complexity.py)"]
   end
 
   subgraph BATCH["Large tree"]
@@ -80,19 +83,28 @@ flowchart TB
 
   subgraph SEQ["Sequential path (default)"]
     A["① Analyst · Claude Sonnet"]
-    D{HIGH/CRITICAL\nor --full?}
+    D{HIGH/CRITICAL or --full?}
     G["② Checker · Gemini"]
     SK["_checker skipped"]
     C["③ Critic · Claude Opus"]
+    PA["Pattern Advisor · Sonnet (design_review only)"]
     A --> D
     D -->|yes| G
     D -->|no: adaptive default| SK
     G --> C
     SK --> C
+    C --> PA
   end
 
+  CACHE[("SHA1 disk cache · .aicritic_cache/<br/>wraps every LLM call · cleared by aicritic cache-clear")]
+
   CLI --> LOAD --> BATCH --> SEQ
-  L1 &amp; L2 &amp; L3 &amp; L4 --> A
+  L1 &amp; L2 &amp; L3 &amp; L4 &amp; L5 --> A
+  L6 &amp; L7 --> PA
+  CACHE -.-> A
+  CACHE -.-> G
+  CACHE -.-> C
+  CACHE -.-> PA
   </div></div>
   <p class="note"><strong>Other modes (same critic):</strong> <code>--skip-checker</code> — Analyst → Critic (no Gemini). <code>--parallel</code> — Analyst and Gemini run concurrently, then Critic. Batching applies before stage ①.</p>
 
@@ -107,6 +119,7 @@ flowchart LR
   X["--fix · --dry-run · --pr"]
   R["--output · --html · --json · --sarif"]
   N["--notify-slack / --notify-teams"]
+  H[(".aicritic-coverage-history.json<br/>last 50 runs · trend tracking")]
 
   C --> F
   F --> E
@@ -115,6 +128,7 @@ flowchart LR
   F --> X
   F --> R
   F --> N
+  T --> H
   </div></div>
 
   <h3>CI gate — <code>aicritic ci</code></h3>
@@ -133,7 +147,7 @@ flowchart TB
   </div></div>
 
   <h3>Agent mode — tool loop</h3>
-  <p class="note">Subcommands: <code>check · ci · agent · cache-clear</code>. The agent exposes 14 tools across five groups; LLM drives until it returns a final reply or hits <code>MAX_STEPS = 12</code>.</p>
+  <p class="note">Subcommands: <code>check · ci · agent · cache-clear</code>. The agent exposes 14 tools across six groups; LLM drives until it returns a final reply or hits <code>MAX_STEPS = 12</code>. <code>aicritic cache-clear</code> wipes <code>.aicritic_cache/</code>.</p>
   <div class="diagram-wrap"><div class="mermaid">
 flowchart TB
   T([Natural language task]) --> LLM[Claude · tool use]
